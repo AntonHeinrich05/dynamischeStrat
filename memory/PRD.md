@@ -13,7 +13,14 @@ Grundsatz: Stabilität, Rückwärtskompatibilität, modulare Integration in best
 - Kern-Services: backtester.py (simulate_pair), optimizer.py (params/discovery/combo/dynamic), robustness.py (WF/DD/Konstanz/Stress/Stabilität/MC/Regime-Info), regime.py (NEU: K-Means-Regime-Erkennung), dynamic_strategy.py (NEU: Regime-Konfig-Optimierung + Benchmark-Vergleich)
 - Lokaler Worker: local_worker/worker.py spiegelt Cloud-Jobs (Optimizer/Backtest)
 
-## Umgesetzt (Session 27.07.2026)
+## Umgesetzt (Session 28.07.2026 – Local-Worker-Stabilität)
+### Bugfix: Worker trennt sich beim Laden großer Kerzen-Caches
+- Symptom: Nach dem Laden lokal gespeicherter Kerzen (gzip+pickle) für einen Strategie-Test war die asyncio-Loop des Workers je Symbol mehrere Sekunden blockiert → Heartbeat fiel aus → Server markierte den Worker als offline → nächster Strat-Test lief über die Cloud statt lokal.
+- Fix: `candle_cache._load_disk`/`_save_disk` werden jetzt konsequent via `asyncio.to_thread` aufgerufen. `get_candles` nutzt das für den Disk-Hydrate, es gibt `persist_symbol_async()` und `_evict_if_needed_async()`. `local_worker/worker.py` verwendet die async-Varianten überall (handle_backtest / handle_optimizer / handle_data_job / auto_update_loop) und wickelt zusätzlich `index.update_from_cache(...)` in `asyncio.to_thread` ab.
+- Kulanteres Timing im Server: `WORKER_TIMEOUT` 20→45s, `QUEUED_TIMEOUT` 90→180s, `STALE_TIMEOUT` 240→300s (`services/local_exec.py`) → einzelne langsame Uploads/IO-Peaks führen nicht mehr zu einem sofortigen „offline"-Flackern.
+- Worker-Version 1.3.0 → 1.3.1. Wichtig: User muss das Worker-Paket neu laden (`/api/localworker/package` → ⚙ Verwalten → Download), sonst greift der Fix im Worker nicht.
+
+## Umgesetzt (Session 27.07.2026 – Teil 1)
 ### Phase 1 – Bugfixes
 - Optimizer speichert Trades des besten Kandidaten während des Laufs (`_collect_best_trades`, `job["export_trades"]`, DB `optimizer_trades`) → Equity-Kurve kommt sofort aus gespeicherten Daten (`source=stored`), kein Timeout mehr; scope=all simuliert weiterhin live
 - CSV-Export im Optimizer: GET /api/optimizer/export/{job_id}?kind=trades|equity + UI-Buttons (wie Backtester)

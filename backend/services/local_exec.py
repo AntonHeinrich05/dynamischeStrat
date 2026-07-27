@@ -22,9 +22,10 @@ from services import optimizer as opt
 
 logger = logging.getLogger(__name__)
 
-WORKER_TIMEOUT = 20        # Sekunden ohne Heartbeat -> offline
-QUEUED_TIMEOUT = 90        # Job wartet ohne Worker -> Fehler
-STALE_TIMEOUT = 240        # Worker meldet keinen Fortschritt mehr -> Fehler
+WORKER_TIMEOUT = 45        # Sekunden ohne Heartbeat -> offline (kulant für Disk-IO
+                           # beim Laden großer Kerzen-Caches / Ergebnis-Upload)
+QUEUED_TIMEOUT = 180       # Job wartet ohne Worker -> Fehler (kurze Reconnects tolerieren)
+STALE_TIMEOUT = 300        # Worker meldet keinen Fortschritt mehr -> Fehler
 MAX_RESULT_TRADES = 50000  # wie Cloud-Persistierung
 
 DEFAULT_SETTINGS = {

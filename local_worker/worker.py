@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKER_VERSION = "1.3.0"
+WORKER_VERSION = "1.3.1"
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "worker_config.json"
 
@@ -262,8 +262,8 @@ async def handle_backtest(api, job_spec, index):
                "export_trades": (job.get("export_trades") or [])[:50000]}
     await api.post(f"/api/worker/job/{job_id}/result", payload, compress=True)
     for sym in a["symbols"]:  # frisch geladene Kerzen dauerhaft speichern
-        if cc.persist_symbol(sym):
-            index.update_from_cache(sym)
+        if await cc.persist_symbol_async(sym):
+            await asyncio.to_thread(index.update_from_cache, sym)
     bt.JOBS.pop(job_id, None)
     logger.info(f"Backtest {job_id} fertig: {job['status']}")
 
@@ -286,8 +286,8 @@ async def handle_optimizer(api, job_spec, index):
                "export_trades": (job.get("export_trades") or [])[:25000]}
     await api.post(f"/api/worker/job/{job_id}/result", payload, compress=True)
     for sym in (body.get("symbols") or []):
-        if cc.persist_symbol(sym):
-            index.update_from_cache(sym)
+        if await cc.persist_symbol_async(sym):
+            await asyncio.to_thread(index.update_from_cache, sym)
     opt.JOBS.pop(job_id, None)
     logger.info(f"Optimizer {job_id} fertig: {job['status']}")
 
@@ -339,8 +339,8 @@ async def handle_data_job(api, job_spec, index):
                     await report(round(i / len(symbols) * 100), f"Lade {sym} ({days_map[sym]} Tage)...")
                     try:
                         await cc.get_candles(data_session, sym, days_map[sym], job=local)
-                        cc.persist_symbol(sym)
-                        index.update_from_cache(sym)
+                        await cc.persist_symbol_async(sym)
+                        await asyncio.to_thread(index.update_from_cache, sym)
                         done_syms.append(sym)
                     except bt.JobCancelled:
                         status = "cancelled"
@@ -376,8 +376,8 @@ async def auto_update_loop(get_settings, busy_check, index):
                     first = (index.meta.get(sym) or {}).get("first_ts")
                     days = max(1, int((time.time() * 1000 - first) / 86400000) + 1) if first else 3
                     await cc.get_candles(session, sym, days)
-                    cc.persist_symbol(sym)
-                    index.update_from_cache(sym)
+                    await cc.persist_symbol_async(sym)
+                    await asyncio.to_thread(index.update_from_cache, sym)
             logger.info("Auto-Update der lokalen Kerzendaten abgeschlossen")
         except Exception as e:
             logger.warning(f"Auto-Update fehlgeschlagen: {e}")

@@ -95,6 +95,18 @@ def _evict_if_needed():
                     f"total_now={_total_candles()}")
 
 
+async def _evict_if_needed_async():
+    """Wie _evict_if_needed – aber Disk-Save läuft in einem Thread, damit die
+    asyncio-Loop (und der Worker-Heartbeat) nicht während gzip/pickle blockiert."""
+    while _total_candles() > MAX_CANDLES_IN_MEMORY and _MEM:
+        oldest = min(_MEM.keys(), key=lambda k: _MEM[k]["used_at"])
+        entry = _MEM.pop(oldest)
+        if DISK_ENABLED:
+            await asyncio.to_thread(_save_disk, oldest, entry["candles"])
+        logger.info(f"candle_cache: evicted {oldest} ({len(entry['candles'])} candles) "
+                    f"total_now={_total_candles()}")
+
+
 def _merge_tail(existing: List[Dict], new_tail: List[Dict]) -> List[Dict]:
     """Fügt neue Kerzen ans Ende an, dedupliziert nach timestamp."""
     if not existing:
@@ -195,8 +207,9 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None) -> List
     async with _LOCK:
         entry = _MEM.get(symbol)
         if entry is None:
-            # optional: Disk-Load
-            disk = _load_disk(symbol)
+            # optional: Disk-Load (gzip+pickle) – in Thread, damit die asyncio-Loop
+            # (und im lokalen Worker der Heartbeat) nicht sekundenlang blockiert.
+            disk = await asyncio.to_thread(_load_disk, symbol)
             if disk:
                 entry = {"candles": disk, "last_refresh": 0, "used_at": time.time()}
                 _MEM[symbol] = entry
@@ -209,7 +222,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None) -> List
         async with _LOCK:
             _MEM[symbol] = {"candles": candles, "last_refresh": time.time(),
                             "used_at": time.time()}
-            _evict_if_needed()
+            await _evict_if_needed_async()
         return [c for c in candles if c["timestamp"] >= start]
 
     # Cache-Hit: prüfe was fehlt
@@ -246,7 +259,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None) -> List
         entry["candles"] = cached
         entry["last_refresh"] = now_ts
         entry["used_at"] = now_ts
-        _evict_if_needed()
+        await _evict_if_needed_async()
     return [c for c in cached if c["timestamp"] >= start]
 
 
@@ -289,6 +302,16 @@ def persist_symbol(symbol: str) -> bool:
     if not entry or not entry["candles"]:
         return False
     _save_disk(symbol, entry["candles"])
+    return True
+
+
+async def persist_symbol_async(symbol: str) -> bool:
+    """Wie persist_symbol, aber gzip/pickle laufen im Thread – Event-Loop des
+    Workers bleibt frei für den Heartbeat (kein „Offline"-Flackern)."""
+    entry = _MEM.get(symbol)
+    if not entry or not entry["candles"]:
+        return False
+    await asyncio.to_thread(_save_disk, symbol, entry["candles"])
     return True
 
 
