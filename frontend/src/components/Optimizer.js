@@ -816,6 +816,7 @@ export default function Optimizer({ onClose }) {
           <ClockCounterClockwise size={13} /> Verlauf
         </button>
         <DynamicPanel />
+        <LearningPanel />
         {showHistory && (
           <div className="opt-history" data-testid="opt-history">
             <div className="opt-section-title">
