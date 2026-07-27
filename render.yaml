@@ -1,0 +1,47 @@
+# Render.com Deployment für CryptoParameterOptimizer1
+# Empfehlung: Backend als Web-Service mit MongoDB Atlas verbinden
+# ------------------------------------------------------------
+# Free-Tier: 512 MB RAM / 0.1 CPU -> wir laufen mit EINEM uvicorn-Worker,
+# begrenzen Optuna/Numpy-Threads und nutzen Disk-Cache in /tmp.
+# Kerzendaten kommen aus dem Hybrid-Cache (services/candle_cache.py).
+
+services:
+  - type: web
+    name: cpo-backend
+    env: python
+    plan: free
+    region: frankfurt
+    buildCommand: pip install -r backend/requirements.txt --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+    startCommand: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 30 --log-level info
+    healthCheckPath: /api/health
+    envVars:
+      - key: MONGO_URL
+        sync: false           # muss beim Deploy manuell gesetzt werden
+      - key: DB_NAME
+        value: cpo_prod
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: GEMINI_API_KEY
+        sync: false           # Google AI Studio Key für den KI Trader – https://aistudio.google.com/apikey (kostenlos)
+      - key: GROQ_API_KEY
+        sync: false           # OPTIONAL – Groq Free-Tier (Llama 3.3 / Qwen) – https://console.groq.com/keys
+      - key: OPENROUTER_API_KEY
+        sync: false           # OPTIONAL – OpenRouter (Grok 4 Fast, DeepSeek u.a. kostenlose Modelle) – https://openrouter.ai/keys
+      - key: MISTRAL_API_KEY
+        sync: false           # OPTIONAL – Mistral Free-Tier – https://console.mistral.ai/api-keys
+      # Numpy/OpenBLAS auf 1 Thread begrenzen (0.1 CPU -> mehrere Threads = teure Context-Switches)
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
+      # Kerzen-Cache konservativ (500K candles -> ~250 MB im Extremfall)
+      - key: CANDLE_CACHE_MAX_CANDLES
+        value: "500000"
+      - key: CANDLE_CACHE_DIR
+        value: "/tmp/candle_cache"
+      - key: CANDLE_CACHE_DISK
+        value: "1"

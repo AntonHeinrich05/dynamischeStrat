@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 8 - Full E2E test of Phase 1 'Lokale Ausfuehrung' (local worker) integration. Backend regression: 20/20 pytest green (test_local_worker.py 12/12 + test_refactor_regression.py 8/8). All 6 required GET endpoints (/api/health, /api/strategies, /api/coins, /api/backtest/active, /api/optimizer/active, /api/system/ram) return 200. Auth guards verified: POST /api/backtest/run without auth -> 401, POST /api/worker/poll without X-Worker-Token -> 401, wrong token -> 401. /api/localworker/package -> 200 application/zip. /api/localworker/status public and shows TestWorker online. Frontend E2E on external URL (Admin/admin login via data-testid=admin-lock-button): Backtester bt-execution-toggle + bt-exec-cloud + bt-exec-local + bt-exec-manage all present, bt-exec-dot has class 'bt-exec-dot on' (green dot). LocalWorkerPanel opens via bt-exec-manage - all 12 required test-ids present (lw-set-cores/ram/parallel/datadir/autoupdate, lw-settings-save, lw-data-table, lw-setup, lw-package-download, lw-token-show, lw-dl-days, lw-dl-start), 'Worker verbunden: TestWorker · 8 Kerne · RAM 20/34 GB' shown, BTCUSDT row 4322 candles visible. ETH 7-day download successfully triggered via lw-dl-coin-ETHUSDT + lw-dl-days=7 + lw-dl-start, download toast 'Download gestartet: ETH (7 Tage)' shown, ETHUSDT row (10080 candles, 17.7.2026-24.7.2026, 0.2 MB) appeared in lw-data-table after ~4s (3s polling verified). lw-token-show reveals real token (starts 7801fdb4ce368cfbc4ef...), lw-package-download href = /api/localworker/package. CLOUD backtest (2 coins x 3 days, Scalping + EMA Pullback): completed successfully with 149 trades (ema_pullback), execution=cloud in active-payload -> REGRESSION OK, ranking + equity curve rendered. LOCAL backtest (Smart Money RSI Reversal, BTC, 1 day): completed in ~2s on real worker, ranking table shows 4 trades / 50% WR / -3.94 PnL, execution=local confirmed via active. bt-local-tag '💻 Lokal' visible during a longer run (2 coins x 30 days). CANCEL: bt-cancel click on 30d/2coin local job -> backend last.status='cancelled', cancel flag True, toast 'Abbruch angefordert...' shown. OPTIMIZER: optimizer-button opens modal, opt-execution-toggle + opt-exec-cloud/local/manage + opt-exec-dot('on') present. Parameter-Optimierung mode + Scalping 2 (EMA Pullback) + BTC + 1 Tag + 5 Iterationen + Lokal -> ran on worker, completed with baseline (13 trades, 53.8% WR, -9.81 PnL) + 3 candidate rows and toast 'Optimierung abgeschlossen'. No live-trading modals triggered.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AdminLogin", "issues": ["Console warning: '<span> cannot be a child of <option>' hydration warning inside select options - cosmetic, does not affect functionality"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_local_worker.py",
+    "/app/backend/tests/test_refactor_regression.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Backtester.js line 737: bt-local-tag rendering depends on job.execution === 'local' OR job.params?.execution === 'local'. Verified visible during 30d/2c run; fast-path 1d/1c completes in <2s so tag briefly present -- acceptable, not a bug.",
+    "LocalWorkerPanel settings-save: clicking lw-settings-save persists settings (verified via subsequent panel re-open shows saved value cores=4), but no explicit success toast was captured in DOM after click. If a toast is intended, its lifetime seems too short to reliably observe. Consider adding toast/inline confirmation for lw-settings-save success.",
+    "Cancel toast: on bt-cancel the toast text is 'Abbruch angefordert...' (request-sent) instead of 'Abgebrochen' (final). Backend status transitions to 'cancelled' correctly but user-facing final confirmation toast could be strengthened once cancel completes."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {"backend": "100% (20/20 pytest + 6/6 endpoints + 3/3 auth guards + zip endpoint)", "frontend": "100% (all 10 requested E2E scenarios pass)"},
+  "test_credentials": "Admin / admin via data-testid=admin-lock-button -> admin-username / admin-password / admin-login-submit. Worker token retrievable via lw-token-show (sample seen: 7801fdb4ce368cfbc4ef6ab818ed6800f94bb92b06f9fea8).",
+  "seed_data_creation": "Triggered ETH 7-day download during UI test -> ETHUSDT (10080 1-min candles) now cached in /root/lw_data. Non-destructive: pre-existing BTCUSDT data untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "External URL: https://daytrader-workbench.preview.emergentagent.com. Admin/admin login. Real local worker (name 'TestWorker') runs as 'python worker.py' in the pod, log at /root/worker.log, data at /root/lw_data. To test Cancel reliably you need a slow enough local job -> 2 coins + 30 days achieves that (~40s runtime). Backtester and Optimizer share the same 'one running job at a time' contract (409 if busy) - poll /api/backtest/active and /api/optimizer/active before starting a new one. bt-local-tag is only rendered while running=true AND execution==='local'. Some transient toasts (settings-save success, cancel completion) disappear within ~1-2s; capture immediately or query [class*='toast'] with polling."
+}

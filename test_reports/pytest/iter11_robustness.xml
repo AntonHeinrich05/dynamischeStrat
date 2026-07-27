@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="6" time="13.970" timestamp="2026-07-26T06:52:51.305842+00:00" hostname="agent-env-e2f3b0a8-a6e2-432a-89be-0f6d17f2c8ac"><testcase classname="tests.test_iter11_robustness" name="test_discovery_with_all_robustness" time="10.987"><failure message="assert (True and 0 &gt;= 1)&#10; +  where True = isinstance([], list)&#10; +  and   0 = len([])">tests/test_iter11_robustness.py:85: in test_discovery_with_all_robustness
+    assert isinstance(top5, list) and len(top5) &gt;= 1 and len(top5) &lt;= 5
+E   assert (True and 0 &gt;= 1)
+E    +  where True = isinstance([], list)
+E    +  and   0 = len([])</failure></testcase><testcase classname="tests.test_iter11_robustness" name="test_discovery_regression_no_robust_fields" time="0.301"><failure message="assert (True and 0 &gt;= 1)&#10; +  where True = isinstance([], list)&#10; +  and   0 = len([])">tests/test_iter11_robustness.py:130: in test_discovery_regression_no_robust_fields
+    assert isinstance(top5, list) and len(top5) &gt;= 1
+E   assert (True and 0 &gt;= 1)
+E    +  where True = isinstance([], list)
+E    +  and   0 = len([])</failure></testcase><testcase classname="tests.test_iter11_robustness" name="test_params_mode_with_wf" time="0.396"><failure message="assert (True and 0 &gt;= 1)&#10; +  where True = isinstance([], list)&#10; +  and   0 = len([])">tests/test_iter11_robustness.py:175: in test_params_mode_with_wf
+    assert isinstance(top5, list) and len(top5) &gt;= 1
+E   assert (True and 0 &gt;= 1)
+E    +  where True = isinstance([], list)
+E    +  and   0 = len([])</failure></testcase><testcase classname="tests.test_iter11_robustness" name="test_days_clamp_5500" time="1.502" /><testcase classname="tests.test_iter11_robustness" name="test_apply_from_top5_definition" time="0.298"><failure message="assert []">tests/test_iter11_robustness.py:235: in test_apply_from_top5_definition
+    assert top5
+E   assert []</failure></testcase><testcase classname="tests.test_iter11_robustness" name="test_localworker_use_gpu_persistence" time="0.379" /></testsuite></testsuites>

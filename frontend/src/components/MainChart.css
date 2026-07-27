@@ -1,0 +1,94 @@
+.main-chart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #121212;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2A2D3A;
+}
+
+.chart-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chart-title > span:first-child {
+  font-size: 18px;
+  font-weight: 700;
+  color: #FFFFFF;
+}
+
+.chart-subtitle {
+  font-size: 11px;
+  color: #5C6070;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.chart-indicators {
+  display: flex;
+  gap: 16px;
+}
+
+.indicator-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #A1A4B0;
+  font-weight: 600;
+}
+
+.indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* Wrapper: eigener stacking- und resize-Kontext, damit der Chart
+   nicht in einer Feedback-Schleife mit dem Flex-Parent immer kleiner wird.
+   - min-height: 0 ist Pflicht in Flex-Column-Layouts, sonst kollabiert der Chart
+   - overflow: hidden isoliert die ResizeObserver-Messung von lightweight-charts */
+.chart-wrap {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  contain: strict;
+}
+
+.chart-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(18, 18, 18, 0.85);
+  color: #A1A4B0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.chart-overlay.chart-error {
+  color: #FF4D4D;
+}

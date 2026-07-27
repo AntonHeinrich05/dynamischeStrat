@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 10 – Backend + Frontend E2E testing of the new 'KI Trader' (ai_trader) features. Backend pytest-Suite tests/test_ai_trader_iter10.py: 13/13 grün (120s), deckt alle geforderten Endpunkte ab: (1) GET /api/ai/status enthält alle neuen Config-Keys (autonomy, learning_enabled, learn_on_trade_close, learning_lookback_days, max_lessons, use_ai_levels) + learning.lessons_count; (2) GET /api/ai/insights liefert stats.totals + lessons-Liste; (3) POST /api/ai/learn (OpenRouter/Nemotron) läuft durch, liefert status=ok, lessons>0, assessment; (4) Proposals: pending Liste vorhanden (nach Lernen 18 Karten), approve schreibt Änderung in /api/autotrade/strategy/ai_trader/coin/{symbol} (max_capital=100 bleibt), reject setzt status=rejected, erneutes Entscheiden -> 404; (5) POST /api/ai/config: autonomy=auto persistiert, zurück auf suggest persistiert, ungültige Werte werden ignoriert; (6) POST /api/ai/analyze läuft (nach 1x 502-Retry) status=ok, /api/ai/chat/history enthält danach 'analysis'/'learning'/'config'-Einträge; (7) POST /api/ai/chat SSE streamt Plattform-Antwort. (8) Regression grün: /api/health, /api/strategies (enthält ai_trader), /api/autotrade/config 200. Frontend Playwright: Admin-Token via localStorage funktioniert; strategy-tab-ai_trader klickbar; edit-strategy-params-btn öffnet ai-trading-panel; ai-learn-toggle öffnet ai-learn-panel mit Statistiken (12 Signale, Winrate 33.3%, Paper-PnL -15.97, Live-PnL -1.08, 12 Trades geschlossen) + 10 Lektionen; ai-setup-toggle zeigt alle 5 Setup-Elemente (ai-autonomy-select, ai-lookback-select, ai-learning-toggle, ai-learn-on-close-toggle, ai-levels-toggle); ai-quick-prompts befüllen ai-chat-input ('Wie ist deine aktuelle Performance?'); ai-proposals-strip zeigt 18 ai-proposal-card, ein Klick auf 'Ablehnen' entfernt eine Karte (18->17). Zustand am Ende: engine.enabled=false, autonomy=suggest (wiederhergestellt).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AITradingPanel Autonomie/Lookback-Select", "issues": ["React Hydration-Warnung in Console: '<span> cannot be a child of <option>' – Icons/Spans innerhalb von <option>-Tags. Rein kosmetisch, aber gibt Hydration-Warnung. Empfehlung: Icons neben dem Select oder shadcn Select statt native <select>."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ai_trader_iter10.py",
+    "/app/test_reports/pytest/iter10_ai_trader.xml"
+  ],
+  "action_items": [
+    "Optional: In AITradingPanel.js die <option>-Elemente ohne <span>-Kinder rendern, um die React Hydration-Warnung zu beheben (data-testid ai-autonomy-select / ai-lookback-select)."
+  ],
+  "critical_code_review_comments": [
+    "ai.py POST /api/ai/config gibt bei ungültigen Autonomie-Werten (z.B. 'banana') aktuell status=success zurück, ohne den Wert anzuwenden – Verhalten ist sicher (ignore), aber ein 400 mit klarem Feld wäre API-freundlicher (getestet: Wert bleibt unverändert, daher kein Bug).",
+    "SSE /api/ai/chat: Fehlermeldungen von Gemini-Provider (429 depleted credits) landen als Assistant-Message im Chat-Verlauf – wie im Kontext bestätigt kein Bug, aber User verwirrend. Empfehlung: automatischer Provider-Failover auf OpenRouter (der aktive Provider), falls Gemini leer ist.",
+    "AITradingPanel.js liefert 18 pending proposals nach einmaligem Lernen – bei mehreren aufeinander folgenden Lernläufen könnte die Anzahl weiter wachsen. Deduplication oder ein Cap wäre sinnvoll."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ai_trader_iter10.py",
+    "/app/test_reports/iteration_10.json",
+    "/app/test_reports/pytest/iter10_ai_trader.xml"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% aller data-testid-Elemente auffindbar & funktional"},
+  "test_credentials": "Admin / Dean06Greif!/Admin (aus /app/memory/test_credentials.md)",
+  "seed_data_creation": "Keine neuen Seed-Daten. Test-Impact: 1 pending proposal rejected + 1 approved; 17+ pending proposals bleiben übrig. autonomy wurde temporär auf 'auto' gesetzt und am Ende auf 'suggest' zurückgesetzt. engine.enabled=false am Ende (bestätigt via GET /api/ai/status).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend-Tests: cd /app/backend && python -m pytest tests/test_ai_trader_iter10.py -v (nutzt REACT_APP_BACKEND_URL). Chat-History-Endpoint /api/ai/chat/history liefert {'messages':[...]} (nicht 'history'); message.role kann 'user'|'assistant'|'analysis'|'learning'|'config' sein. Proposal-Approve schreibt in strategy_coin_configs; max_capital bleibt IMMER 100 (Whitelist in ai_knowledge.py). /api/ai/analyze braucht 30-90s und kann sporadisch 502/429 liefern -> Test hat 1x Retry mit 12s Wartezeit. Ingress-Timeout kann 502 werfen bei >60s LLM-Aufrufen. Bei Frontend-Tests: strategy-tab-scalping könnte hinter offenem AI-Modal liegen; erst Modal schließen. Frontend hat data-testid für alle vom Auftrag geforderten Elemente. Env am Ende: ai_trader autonomy=suggest, enabled=false.",
+  "rca of the issue": "n/a – keine Bugs gefunden. Einzige Beobachtung: React-Hydration-Warnung wegen <span>-Kind in <option>-Element in AITradingPanel Setup-Selects. Reproduzierbar durch Öffnen des KI-Trader Setup-Panels (Console-Warnung). Mitigation: <option>-Text ohne Kind-Elemente rendern oder auf shadcn <Select> umstellen."
+}

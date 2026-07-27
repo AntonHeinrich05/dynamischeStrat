@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="64.903" timestamp="2026-07-21T17:19:05.619416+00:00" hostname="agent-env-aeed40d0-6fec-48b5-84ce-73feade80213"><testcase classname="tests.test_winrate_bug" name="test_winrate_bugfix_full_flow" time="57.161"><failure message="AttributeError: 'list' object has no attribute 'get'">def test_winrate_bugfix_full_flow():
+        # 1) LONG win case (tp1=200, sl=100 → price is way above tp1 → win immediately)
+        sid_win = insert_signal("BTCUSDT", "LONG", tp1=200, sl=100, sid_suffix="LONGWIN")
+        # 2) SHORT edge case (spec description)
+        sid_short = insert_signal("BTCUSDT", "SHORT", tp1=999999, sl=1, sid_suffix="SHORT")
+        # 3) LONG loss (sl above price)
+        sid_loss = insert_signal("BTCUSDT", "LONG", tp1=999999, sl=888888, sid_suffix="LONGLOSS")
+    
+        restart_and_wait()
+    
+        # Check log for rehydration
+        logs = subprocess.run(["tail", "-n", "300", "/var/log/supervisor/backend.err.log"],
+                             capture_output=True, text=True).stdout
+        print("---BACKEND LOG TAIL---")
+        print(logs[-3000:])
+        assert "Re-hydrated" in logs, "Rehydration log message missing"
+    
+        # Verify DB
+        win = db.signals.find_one({"id": sid_win})
+        loss = db.signals.find_one({"id": sid_loss})
+        short = db.signals.find_one({"id": sid_short})
+    
+        print(f"WIN doc: result={win.get('result')} status={win.get('status')}")
+        print(f"LOSS doc: result={loss.get('result')} status={loss.get('status')}")
+        print(f"SHORT doc: result={short.get('result')} status={short.get('status')}")
+    
+        assert win.get("result") == "win", f"LONG win signal not marked win: {win.get('result')}"
+        assert win.get("status") == "closed"
+        assert loss.get("result") == "loss", f"LONG loss signal not marked loss: {loss.get('result')}"
+    
+        # Performance endpoint
+        r = requests.get(f"{BASE_URL}/api/performance", timeout=10)
+        assert r.status_code == 200
+        perf = r.json()
+        btc = None
+        if isinstance(perf, dict):
+&gt;           btc = perf.get("BTCUSDT") or perf.get("performance", {}).get("BTCUSDT")
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: 'list' object has no attribute 'get'
+
+backend/tests/test_winrate_bug.py:123: AttributeError</failure></testcase><testcase classname="tests.test_winrate_bug" name="test_regression_capital_and_balance" time="7.563" /></testsuite></testsuites>

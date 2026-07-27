@@ -1,0 +1,144 @@
+import React, { useState } from 'react';
+import { FloppyDisk, Trophy } from '@phosphor-icons/react';
+import { toast } from 'sonner';
+import { authHeaders } from '../auth';
+
+const API_URL = process.env.REACT_APP_BACKEND_URL;
+const fmt = (v, d = 2) => (v === null || v === undefined ? '–' : Number(v).toFixed(d));
+
+const cfgPills = (cfg) => {
+  const entries = Object.entries(cfg || {});
+  if (!entries.length) return <span className="opt-param-pill">Baseline (aktuelle Einstellungen)</span>;
+  return entries.map(([k, v]) => <span key={k} className="opt-param-pill">{k}: <b>{String(v)}</b></span>);
+};
+
+const MetricCells = ({ m }) => (
+  <>
+    <td>{m?.trades ?? '–'}</td>
+    <td className={(m?.win_rate || 0) >= 50 ? 'pos' : 'neg'}>{fmt(m?.win_rate, 1)}%</td>
+    <td className={`mono ${(m?.pnl || 0) >= 0 ? 'pos' : 'neg'}`}>{fmt(m?.pnl)}</td>
+    <td className="mono neg">{fmt(m?.max_drawdown)}</td>
+  </>
+);
+
+export default function DynamicResult({ result, onSaved }) {
+  const dy = result?.dynamic;
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  if (!dy) return null;
+  const model = dy.model || {};
+  const cmp = dy.comparison || {};
+  const verdict = dy.verdict || {};
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/dynamic/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          name: name || `Dynamisch: ${result.strategy_name || result.strategy_id}`,
+          strategy_id: result.strategy_id,
+          symbols: result.symbols,
+          timeframe: result.timeframe,
+          model: dy.model,
+          configs: dy.configs,
+          fallback_config: dy.static_benchmark?.config || {},
+          settings: dy.settings,
+          verdict: dy.verdict,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) { toast.error(d.detail || 'Speichern fehlgeschlagen'); return; }
+      setSaved(true);
+      toast.success('Dynamische Strategie gespeichert – Verwaltung unter "Dynamische Strategien"');
+      onSaved && onSaved();
+    } catch { toast.error('Verbindungsfehler'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div data-testid="dyn-result">
+      <div className="opt-section-title">
+        <Trophy size={15} weight="fill" style={{ color: '#FFD700' }} />
+        DYNAMISCHE STRATEGIE · {result.strategy_name} · {result.timeframe} · {result.days} Tage
+      </div>
+
+      <div className={`dyn-verdict ${verdict.dynamic_better ? 'ok' : 'warn'}`} data-testid="dyn-verdict">
+        <b>{verdict.dynamic_better ? '✓ Dynamisch empfohlen' : '✗ Statisch bevorzugen'}</b>
+        <div>{verdict.recommendation}</div>
+        <ul>{(verdict.reasons || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
+      </div>
+
+      <div className="opt-label" style={{ marginTop: 10 }}>
+        ERKANNTE MARKTREGIME ({(model.regimes || []).length} · automatisch bestimmt, max. {dy.settings?.max_regimes} ·
+        Cluster-Qualität {fmt(model.silhouette, 2)}) – Erkennung ohne Lookahead, Umschalten nur bei
+        Sicherheit ≥ {fmt(dy.settings?.confidence_min, 0)}% und Mindesthaltedauer {dy.settings?.min_hold_days} Tage
+      </div>
+      <div className="opt-table-wrap">
+        <table className="opt-table" data-testid="dyn-regime-table">
+          <thead><tr><th>Regime</th><th>Anteil</th><th>Trades</th><th>WR</th><th>PnL</th><th>Max DD</th><th>Basis-PnL</th><th>Konfiguration</th></tr></thead>
+          <tbody>
+            {(dy.regimes || []).map((r) => (
+              <tr key={r.regime}>
+                <td className="opt-small">#{r.regime + 1} {r.label}{r.insufficient && <span className="neg"> · zu wenig Trades → Fallback</span>}</td>
+                <td>{fmt(r.share_pct, 0)}%</td>
+                <td>{r.metrics?.trades ?? '–'}</td>
+                <td className={(r.metrics?.win_rate || 0) >= 50 ? 'pos' : 'neg'}>{fmt(r.metrics?.win_rate, 0)}%</td>
+                <td className={`mono ${(r.metrics?.pnl || 0) >= 0 ? 'pos' : 'neg'}`}>{fmt(r.metrics?.pnl)}</td>
+                <td className="mono neg">{fmt(r.metrics?.max_drawdown)}</td>
+                <td className={`mono ${(r.baseline_metrics?.pnl || 0) >= 0 ? 'pos' : 'neg'}`}>{fmt(r.baseline_metrics?.pnl)}</td>
+                <td><div className="opt-params-list" style={{ margin: 0 }}>{cfgPills(r.insufficient ? dy.static_benchmark?.config : r.config)}</div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="opt-label" style={{ marginTop: 10 }}>
+        VERGLEICH: DYNAMISCH vs. STATISCHE BENCHMARK (gleiches Suchbudget · Test = unbekannte Daten,
+        letzte {fmt(100 - (dy.settings?.train_pct || 75), 0)}% des Zeitraums · {dy.test_switches ?? 0} Regimewechsel im Test)
+      </div>
+      <div className="opt-table-wrap">
+        <table className="opt-table" data-testid="dyn-compare-table">
+          <thead><tr><th></th><th>Trades</th><th>WR</th><th>PnL</th><th>Max DD</th><th>Trades</th><th>WR</th><th>PnL</th><th>Max DD</th></tr></thead>
+          <tbody>
+            <tr><td colSpan="1"></td><td colSpan="4" className="opt-small">TRAINING</td><td colSpan="4" className="opt-small">TEST (unbekannt)</td></tr>
+            <tr>
+              <td className="opt-small"><b>Dynamisch</b></td>
+              <MetricCells m={cmp.dynamic?.train} /><MetricCells m={cmp.dynamic?.test} />
+            </tr>
+            <tr>
+              <td className="opt-small">Statisch (Benchmark)</td>
+              <MetricCells m={cmp.static?.train} /><MetricCells m={cmp.static?.test} />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="opt-params-list" style={{ marginTop: 6 }}>
+        <span className="opt-small" style={{ alignSelf: 'center' }}>STATISCHE BENCHMARK-KONFIG:</span>
+        {cfgPills(dy.static_benchmark?.config)}
+      </div>
+      <div className="opt-small" style={{ margin: '6px 0' }}>
+        Hinweis: {dy.settings?.switch_policy}. Regime mit weniger als {dy.settings?.min_trades_per_regime} Trades
+        nutzen automatisch die statische Fallback-Konfiguration.
+      </div>
+
+      <div className="opt-save-row">
+        <input type="text" placeholder="Name der dynamischen Strategie"
+          value={name} onChange={e => setName(e.target.value)} data-testid="dyn-save-name" />
+        <button className="opt-apply" onClick={save} disabled={saving || saved} data-testid="dyn-save">
+          <FloppyDisk size={15} weight="bold" />
+          {saved ? 'Gespeichert ✓' : 'Als dynamische Strategie speichern'}
+        </button>
+      </div>
+      {!verdict.dynamic_better && (
+        <div className="opt-small" style={{ color: '#FFB74D' }}>
+          Achtung: Die dynamische Variante war im Test NICHT nachweislich besser als die statische Benchmark –
+          Speichern ist möglich, aber die statische Strategie ist aktuell die bessere Wahl.
+        </div>
+      )}
+    </div>
+  );
+}

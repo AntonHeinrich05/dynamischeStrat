@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 11 – Backend + Frontend Testing der neuen Robustness-Features im Strategie-Optimizer (Walk-Forward, DD-Filter, Konstanz, Top-5, days=5500-Clamp, GPU-Setting). Backend pytest tests/test_iter11_robustness.py: 2/6 grün. KRITISCHER BUG entdeckt: `result.top5` ist in ALLEN Discovery-Läufen leer (`top5: []`), sowohl mit als auch ohne aktivierte WF/DD/Konstanz-Flags. Ursache: In services/optimizer.py Zeile 749-752 wird `tracker = robustness.TopTracker(12)` erzeugt, aber NICHT an `_discover(...)` übergeben – nur `_refine` und `_optimize_trade_settings` bekommen den Tracker. Bei mode=discovery mit `optimize.tpsl:False` läuft weder Refine noch Trade-Space, damit bleibt der Tracker leer und candidates=[]. Auch in mode=params mit iterations=8 kam bei uns top5=[] zurück (nur 2 Trades gefunden, evtl. filtert `score > -9e8` alle raus – Nebeneffekt). Frontend-Regression grün: Optimizer-Modal öffnet, alle 3 Robustheits-Toggle-Chips (opt-wf-toggle/opt-dd-toggle/opt-ct-toggle) funktionieren und blenden die richtigen Eingabefelder ein (opt-wf-trainpct, opt-wf-split-info, opt-dd-maxpct, opt-ct-chunkdays, opt-ct-maxdev). opt-days-Dropdown enthält 27 Optionen inkl. 1800/3600/5400. opt-exec-manage öffnet LocalWorker-Panel, lw-set-gpu ist NICHT mehr disabled und bietet 'Aus (CPU)' / 'An – Auto-Erkennung, CPU-Fallback'. GPU-Persistenz (POST /api/localworker/settings mit use_gpu=true) funktioniert. days-Clamp auf 5500 akzeptiert 9999 ohne 400er. Ein voller E2E-Frontend-Flow mit Top-5-Karten wurde NICHT durchgeführt, weil das Backend top5=[] liefert – die opt-top5-0..4-Karten würden nicht gerendert werden.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/optimizer/run (mode=discovery)", "issue": "result.top5 ist IMMER leer ([]). Ursache: In services/optimizer.py run_optimizer() Zeile ~736 wird TopTracker(12) erzeugt, aber NICHT an _discover() (Zeile 749) übergeben. Nur _refine (Zeile 762) und _optimize_trade_settings (Zeile 773) füllen den Tracker. Wenn mode='discovery' (do_refine=False) und optimize.tpsl=False (do_trade=False → trade_space leer), bleibt der Tracker leer → candidates=[] → top5=[]. Damit funktioniert das komplette neue Top-5-Feature im reinen Discovery-Modus nicht.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/optimizer/run (mode=params, iterations=8)", "issue": "Auch im params-Modus lieferte der Test top5=[] zurück. Die Filterung candidates = [t for t in top if t.get('score',-1e18) > -9e8] (Zeile 733) filtert bei niedrigen Iterationen alles raus (Baseline hat vermutlich 2 Trades, score < -9e8 wegen min_trades-Filter). Sollte zumindest die Baseline oder best-Kombination als top5-Eintrag stehen bleiben.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/localworker/settings", "issue": "Antwortformat inkonsistent: returns {'settings': {...}} statt der Settings direkt. Nicht kritisch, aber Frontend/Test-Code muss die Wrapper-Schicht kennen."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Optimizer Discovery Top-5-Anzeige", "issue": "Da Backend top5=[] liefert, werden die neuen Top-5-Karten (opt-top5-0..4) nach einem Discovery-Lauf nicht gerendert. Frontend-Code für Top5-Rendering ist vorhanden und korrekt, aber wartet auf Backend-Fix.", "affected_selectors": ["opt-top5", "opt-top5-0", "opt-top5-1"]}
+    ],
+    "design_issues": [
+      {"screen": "Optimizer opt-days <select>", "issues": ["React Hydration-Warning: '<span> cannot be a child of <option>' – Icons/Spans in <option>-Elementen (bekannt aus Iter10, weiterhin vorhanden). Rein kosmetisch."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_robustness.py",
+    "/app/test_reports/pytest/iter11_robustness.xml"
+  ],
+  "action_items": [
+    "FIX (CRITICAL): In /app/backend/services/optimizer.py run_optimizer(), Zeile ~749 `_discover(...)` Aufruf um `tracker=tracker` erweitern, damit im reinen Discovery-Modus (ohne Refine/Trade) der TopTracker gefüllt wird. Sonst funktioniert das komplette neue Top-5-Feature im Standard-Discovery-Fall nicht.",
+    "FIX (HIGH): In params-Modus die candidates-Filterung (Zeile 733) so anpassen, dass auch bei niedrigen Iterationen mindestens die Baseline/best als top5-Eintrag verbleibt (evtl. Fallback: wenn candidates leer und best existiert → best als einzigen Eintrag).",
+    "Optional: /api/localworker/settings GET/POST Antwortformat vereinheitlichen (entweder immer wrapped oder nie wrapped).",
+    "Optional: <option>-Elemente ohne <span>-Kinder rendern in Optimizer.js (Hydration-Warning)."
+  ],
+  "critical_code_review_comments": [
+    "services/optimizer.py Zeile 736-752: `tracker = robustness.TopTracker(12)` wird erzeugt aber im reinen Discovery-Pfad nie befüllt – klarer Bug im neuen Feature.",
+    "_finalize_top5 sortiert bei wf_enabled nach wf_score, sonst nach score – gut. Aber bei leerer candidates-Liste wird nichts gerendert und der Fehler bleibt still (nur Warning-Log). Empfehlung: mindestens best_metrics als Fallback-Eintrag.",
+    "days-Clamp auf 5500 (Zeile 608) funktioniert korrekt, aber es gibt keine Rückmeldung an den Client, dass der Wert geklemmt wurde. UX-Verbesserung: Response echo params zurückgeben.",
+    "params-Whitelist in routers/optimizer.py Zeile 46-50 enthält korrekt walk_forward/dd_filter/constancy – rückwärtskompatibel."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_robustness.py",
+    "/app/test_reports/iteration_11.json",
+    "/app/test_reports/pytest/iter11_robustness.xml"
+  ],
+  "success_rate": {"backend": "33% (2/6 – days-Clamp und lw-use_gpu grün, top5-Feature bricht 4 Tests)", "frontend": "100% aller UI-Elemente vorhanden und interaktiv (E2E-Full-Run nicht möglich wegen Backend-Bug)"},
+  "test_credentials": "Admin / admin (aus /app/memory/test_credentials.md)",
+  "seed_data_creation": "Keine Seed-Daten. Test-Impact: LocalWorker use_gpu wurde temporär auf true gesetzt und am Ende auf den Ursprungswert zurückgesetzt.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Backend-Tests: cd /app/backend && python -m pytest tests/test_iter11_robustness.py -v -o addopts='' (xdist im pytest.ini stört Einzeltests – deshalb -o addopts=''). BASE_URL wird aus /app/frontend/.env gelesen falls REACT_APP_BACKEND_URL nicht in Umgebung ist. Nach Fix des top5-Bugs erneut laufen lassen – die 4 fehlgeschlagenen Tests sollten grün werden. Zusatz-Check: bei mode=params sicherstellen dass auch mit nur 8 Iterationen top5>=1 zurückkommt. Frontend E2E-Flow (Full-Run mit Top-5-Karten klicken) kann erst nach Backend-Fix getestet werden – alle UI-Elemente sind aber bereits verifiziert vorhanden und funktional.",
+  "rca of the issue": "BUG: top5=[] in Discovery-Modus. Reproduktion: POST /api/optimizer/run mit mode=discovery, iterations=8, optimize.tpsl=false → nach 2-5s status=done, result.top5=[]. RCA: run_optimizer() erzeugt `tracker = robustness.TopTracker(12)` (Zeile 736) und übergibt ihn an _refine/_optimize_trade_settings, aber NICHT an _discover(). In reinem Discovery-Modus (mode='discovery', tpsl aus) laufen weder Refine noch Trade-Space – der Tracker bleibt leer, candidates=[] und _finalize_top5 gibt [] zurück. Mitigation: In Zeile 749 `_discover(..., tracker=tracker)` als kwarg ergänzen (die Funktion akzeptiert den Parameter bereits, Zeile 367). Zusätzlich sollte _finalize_top5 als Fallback zumindest das best-Result als einzigen Eintrag zurückgeben, falls candidates leer sind."
+}
