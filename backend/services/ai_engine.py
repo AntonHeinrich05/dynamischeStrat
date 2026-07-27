@@ -1718,7 +1718,19 @@ class AIEngine:
             await self.db.ai_chat.insert_one({
                 "id": str(uuid.uuid4()), "role": "assistant", "text": acc, "ts": _now_iso(),
             })
-
+# Auto-Lektionen: fordert der Nutzer die KI im Chat auf, sich etwas dauerhaft
+        # zu merken (oder eine Lektion zu vergessen), sofort ins Kerngedaechtnis speichern -
+        # ganz ohne den Button "KI lernen". Bei Erfolg wird eine Bestaetigung in den
+        # Stream gegeben (dediziertes 'lesson'-Event -> Frontend zeigt gruenen Hinweis).
+        try:
+            if self.learning:
+                res = await self.learning.extract_and_store_from_chat(text, acc)
+                if res and res.get("status") == "ok" and (
+                        res.get("lessons_added") or res.get("lessons_updated")
+                        or res.get("lessons_removed")):
+                    yield {"lesson": res}
+        except Exception as e:
+            logger.warning(f"Chat auto-lesson failed: {e}")
     async def clear_chat(self):
         await self.db.ai_chat.delete_many({})
 
