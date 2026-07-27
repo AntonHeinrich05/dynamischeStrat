@@ -33,17 +33,32 @@ Grundsatz: Stabilität, Rückwärtskompatibilität, modulare Integration in best
 - routers/dynamic.py: save/list/refresh (aktuelles Regime + Sicherheit + Ähnlichkeiten + Info-Vergleich aller Konfigs über letzte X Tage)/apply (Coin-Overrides via strategy_coin_configs)/delete
 - UI: Modus-Karte "Dynamische Strategie" mit Einstellungen (max. Regime, Merkmal-Fenster, Umschalt-Sicherheit, Mindesthaltedauer, Training-%), DynamicResult.js (Regime-Tabelle, Vergleich, Verdict, Speichern), DynamicPanel.js (Verwaltung, "Regime aktualisieren", "Konfiguration übernehmen")
 
+## Umgesetzt (Session 27.07.2026, Teil 2 – Bugfixes + 4 Features)
+### Bugfixes (vom User gemeldet)
+- Lokaler Worker & Dynamik: alte Worker (<1.3.0) interpretierten mode=dynamic als Discovery → leeres Ergebnis. Fix: WORKER_VERSION 1.3.0, Server-Gate (409 mit Anleitung) bei execution=local + dynamic mit altem Worker, DynamicResult zeigt klaren Hinweis (data-testid dyn-missing) statt leerer Anzeige. User-Worker muss Paket neu laden (/api/localworker/package liefert immer aktuellen Code)
+- Backend-Crash bei großen Tests: Equity-Fallback simulierte in der Cloud (2000 Tage × 10 Coins → OOM). Fix: RAM-Guard in _simulate_equity (days>120 oder days×coins>900 → 400 mit deutscher Meldung), Export-Rows auf 25000 gekappt (Mongo 16MB-Limit)
+- Discovery-Indikatoren: verifiziert vorhanden (Lade-Race bei COINS)
+### Feature: Auto-Regime-Umschaltung + Wechsel-Protokoll
+- services/dynamic_live.py: refresh/apply/check_one/watch_loop (Hintergrund-Watcher, startet im Server-Lifespan); pro dynamischer Strategie: auto_check_enabled, auto_apply_enabled, check_interval_minutes, check_days (POST /api/dynamic/{id}/settings)
+- Wechsel-Protokoll db.dynamic_switch_log (from/to, Sicherheit, Ähnlichkeiten, Begründung, auto_applied), GET /api/dynamic/{id}/log; UI: Auto-Prüfung/Auto-Übernahme-Toggles + Protokoll-Ansicht im DynamicPanel
+### Feature: Regel-Varianten pro Regime (nur Custom-Strategien)
+- dynamic_strategy.optimize_regime_rules: testet EINE zusätzliche Regel je Regime (Kandidaten aus gewählten Indikatoren, sortiert nach Lern-Gedächtnis), akzeptiert nur bei >10% Verbesserung; fließt in Dynamik-Backtest/Verdict ein (Live nutzt weiterhin Basis-Regeln + Trade-Parameter – dokumentiert im UI-Tooltip)
+- UI: Checkbox dyn-rule-variants blendet Indikator-Auswahl im Dynamik-Modus ein; Variante als Pill in der Regime-Tabelle
+### Feature: Lern-Gedächtnis
+- services/learning.py: record_run (nach jedem Optimizer-Lauf, Cloud + lokal), indicator_weights (gewichtet Regel-Varianten-Kandidaten), summary; db.learning_memory; GET /api/learning/summary; UI: LearningPanel im Optimizer
+
 ## Test-Status
-- Testing-Agent Iteration 12: Backend 23/23 bestanden, Frontend strukturell verifiziert (alle data-testids, Modus-Umschaltung, Panels)
-- Bestehende Modi (params/discovery/combo), Backtester, Apply-Flows: Regression bestanden
+- Iteration 12: Backend 23/23, Frontend verifiziert (Grundfeatures)
+- Iteration 13: Backend 14/14 (Bugfixes + Features), Frontend verifiziert; 1 Bug (LearningPanel nicht gerendert) → gefixt
+- Iteration 14: LearningPanel-Fix verifiziert
+- User-Worker "Anton-PC" v1.3.0 bereits verbunden
 
 ## Bekannte Minor-Punkte (vorbestehend, nicht blockierend)
 - Console: 401/Failed-to-fetch vor Admin-Login (fetchNotif/fetchSession)
 - React-Warnung: <span> in <option> in einem Select
 
 ## Backlog / Nächste Schritte
-- P1: Automatische Regime-Umschaltung im Live-Betrieb (Scheduler statt Button), mit Wechsel-Historie/Protokoll
-- P1: Dynamik-Modus auch über lokalen Worker ausführbar machen (execution=local, numpy im Worker-Requirements prüfen)
-- P2: Pro Regime optional andere Regeln/Indikatoren testen (nicht nur Trade-Parameter)
-- P2: Lern-Datenbank: Ergebnisse aus WF/MC/Konstanz je Marktphase sammeln und für spätere Suchen priorisieren
+- P1: Regel-Varianten auch live nutzbar machen (Variante als abgeleitete Custom-Strategie speichern + per Coin-Toggle umschalten)
+- P2: Benachrichtigung (Notification) bei automatischem Regime-Wechsel
+- P2: Lern-Gedächtnis: TTL/Begrenzung + Nutzung auch für Discovery-Priorisierung
 - P2: Regime-Auto-Anzahl zusätzlich mit Gap-Statistik validieren
