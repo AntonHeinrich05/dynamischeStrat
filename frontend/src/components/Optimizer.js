@@ -9,6 +9,7 @@ import TIMEFRAMES from '../constants/timeframes';
 import EquityChart from './EquityChart';
 import DynamicResult from './DynamicResult';
 import DynamicPanel from './DynamicPanel';
+import LearningPanel from './LearningPanel';
 import './Optimizer.css';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
@@ -133,6 +134,7 @@ export default function Optimizer({ onClose }) {
   const [dynConfMin, setDynConfMin] = useState(saved.dynConfMin ?? 70);
   const [dynMinHold, setDynMinHold] = useState(saved.dynMinHold ?? 2);
   const [dynTrainPct, setDynTrainPct] = useState(saved.dynTrainPct ?? 75);
+  const [dynRuleVariants, setDynRuleVariants] = useState(!!saved.dynRuleVariants);
   const [selTop, setSelTop] = useState(0);
   // ---- Verlauf (Robustheit über alle Läufe) ----
   const [showHistory, setShowHistory] = useState(false);
@@ -150,7 +152,7 @@ export default function Optimizer({ onClose }) {
         execution, wfEnabled, wfTrainPct, wfMode, wfWindows,
         ddEnabled, ddMaxPct, ctEnabled, ctChunkDays, ctMaxDev,
         stEnabled, stMult, sbEnabled, sbVar, mcEnabled, mcRuns, rgEnabled,
-        dynMaxRegimes, dynLookback, dynConfMin, dynMinHold, dynTrainPct,
+        dynMaxRegimes, dynLookback, dynConfMin, dynMinHold, dynTrainPct, dynRuleVariants,
       }));
     } catch { /* ignore */ }
   }, [mode, selStrategy, selCoins, days, timeframe, objective, iterations,
@@ -158,7 +160,7 @@ export default function Optimizer({ onClose }) {
     execution, wfEnabled, wfTrainPct, wfMode, wfWindows,
     ddEnabled, ddMaxPct, ctEnabled, ctChunkDays, ctMaxDev,
     stEnabled, stMult, sbEnabled, sbVar, mcEnabled, mcRuns, rgEnabled,
-    dynMaxRegimes, dynLookback, dynConfMin, dynMinHold, dynTrainPct]);
+    dynMaxRegimes, dynLookback, dynConfMin, dynMinHold, dynTrainPct, dynRuleVariants]);
 
   // ---- Lokaler Worker: Online-Status für die Ausführungs-Auswahl ----
   useEffect(() => {
@@ -324,7 +326,7 @@ export default function Optimizer({ onClose }) {
         body: JSON.stringify({
           mode, strategy_id: selStrategy, symbols: selCoins, days, timeframe,
           objective, iterations, min_trades: minTrades, max_rules: maxRules,
-          indicators: (mode === 'params' || mode === 'dynamic') ? undefined : indicators,
+          indicators: (mode === 'params' || (mode === 'dynamic' && !dynRuleVariants)) ? undefined : indicators,
           optimize: optFlags,
           include_trade_params: !!optFlags.tpsl,
           algorithm,
@@ -333,7 +335,8 @@ export default function Optimizer({ onClose }) {
           execution,
           dynamic: mode === 'dynamic'
             ? { max_regimes: dynMaxRegimes, lookback_days: dynLookback,
-              confidence_min: dynConfMin, min_hold_days: dynMinHold }
+              confidence_min: dynConfMin, min_hold_days: dynMinHold,
+              rule_variants: dynRuleVariants }
             : undefined,
           walk_forward: mode === 'dynamic'
             ? { enabled: true, train_pct: dynTrainPct, mode: 'single' }
@@ -603,6 +606,11 @@ export default function Optimizer({ onClose }) {
               Empfehlung: langen Zeitraum wählen (≥ 90 Tage), damit jedes Regime genügend Trades hat.
               Optimiert werden die oben angehakten Einstellungs-Gruppen (Standard: TP/SL + Hebel) – pro Regime eine eigene Konfiguration.
             </div>
+            <label className="opt-check" style={{ marginTop: 6 }} title="Nur für Custom-Strategien: testet pro Regime, ob EINE zusätzliche Regel aus den gewählten Indikatoren die Performance deutlich verbessert (>10%). Kandidaten werden nach dem Lern-Gedächtnis sortiert.">
+              <input type="checkbox" checked={dynRuleVariants}
+                onChange={e => setDynRuleVariants(e.target.checked)} data-testid="dyn-rule-variants" />
+              Regel-Varianten pro Regime testen (nur Custom-Strategien · Indikatoren unten anhaken)
+            </label>
           </div>
         )}
 
@@ -758,9 +766,13 @@ export default function Optimizer({ onClose }) {
           )}
         </div>
 
-        {mode !== 'params' && mode !== 'dynamic' && (
+        {(mode === 'discovery' || mode === 'combo' || (mode === 'dynamic' && dynRuleVariants)) && (
           <div className="opt-row">
-            <div className="opt-label">INDIKATOREN FÜR DIE SUCHE (Häkchen = wird getestet)</div>
+            <div className="opt-label">
+              {mode === 'dynamic'
+                ? 'INDIKATOREN FÜR DIE REGEL-VARIANTEN (Häkchen = wird pro Regime getestet)'
+                : 'INDIKATOREN FÜR DIE SUCHE (Häkchen = wird getestet)'}
+            </div>
             <div className="opt-chips">
               {INDICATOR_POOL.map(i => (
                 <button key={i.id} className={`opt-chip ${indicators.includes(i.id) ? 'on' : ''}`}

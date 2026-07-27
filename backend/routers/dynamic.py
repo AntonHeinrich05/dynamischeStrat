@@ -3,10 +3,12 @@
 - POST /api/dynamic/save            gespeicherte dynamische Strategie anlegen
 - GET  /api/dynamic/list            alle dynamischen Strategien
 - POST /api/dynamic/{id}/refresh    aktuelles Regime je Coin neu bestimmen
-                                    (inkl. Sicherheit, Ähnlichkeiten, Vergleich
-                                    aller Konfigurationen über die letzten X Tage)
+                                    (Wechsel werden protokolliert)
 - POST /api/dynamic/{id}/apply      aktive Regime-Konfiguration als Coin-Override
                                     für Live/Paper übernehmen
+- POST /api/dynamic/{id}/settings   Auto-Prüfung/Auto-Übernahme konfigurieren
+- GET  /api/dynamic/{id}/log        Wechsel-Protokoll
+- GET  /api/learning/summary        Lern-Gedächtnis (Robustheit je Marktphase)
 - DELETE /api/dynamic/{id}
 """
 import logging
@@ -14,13 +16,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict
 
-import aiohttp
 from fastapi import APIRouter, Depends, HTTPException
 
 from core import state
 from core.auth import require_admin
-from core.state import autotrader
 from core.utils import _clean
+from services import dynamic_live, learning
 from strategies.registry import registry as strategy_registry
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,10 @@ async def dynamic_save(body: Dict, _: bool = Depends(require_admin)):
            "model": body["model"],
            "configs": body["configs"],
            "fallback_config": body.get("fallback_config") or {},
-           "settings": body.get("settings") or {},
+           "rule_variants": body.get("rule_variants") or {},
+           "settings": {**(body.get("settings") or {}),
+                        "auto_check_enabled": False, "auto_apply_enabled": False,
+                        "check_interval_minutes": 60, "check_days": 30},
            "verdict": body.get("verdict") or {},
            "created_at": datetime.now(timezone.utc).isoformat(),
            "last_state": {}}
@@ -71,119 +75,65 @@ async def dynamic_delete(did: str, _: bool = Depends(require_admin)):
     res = await state.db.dynamic_strategies.delete_one({"id": did})
     if not res.deleted_count:
         raise HTTPException(status_code=404, detail="Nicht gefunden")
+    await state.db.dynamic_switch_log.delete_many({"dynamic_id": did})
     return {"status": "deleted"}
 
 
-async def _refresh_state(doc: Dict, days: int) -> Dict:
-    """Aktuelles Regime je Coin bestimmen + Info-Vergleich aller Konfigurationen
-    über die letzten Tage (nur Anzeige – NICHT Grundlage der Umschaltung, um
-    Overfitting auf die jüngste Vergangenheit zu vermeiden)."""
-    import asyncio
-    from services import regime as rg
-    from services import dynamic_strategy as dyn
-    from services.backtester import fetch_history, simulate_pair
-    from services.timeframes import aggregate_candles
-    from services.bitunix_trade import DEFAULT_COIN_CFG
-    from core.state import scanner
-
-    model = doc["model"]
-    tf = doc.get("timeframe") or model.get("timeframe") or "1m"
-    s = doc.get("settings") or {}
-    conf_min = float(s.get("confidence_min") or 70) / 100.0
-    min_hold = float(s.get("min_hold_days") or 2)
-    strategy = strategy_registry.get(doc["strategy_id"])
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Basis-Strategie nicht mehr vorhanden")
-    configs = {int(k): v for k, v in (doc.get("configs") or {}).items()}
-    cfg_base = {**DEFAULT_COIN_CFG}
-    per_symbol = {}
-    async with aiohttp.ClientSession() as session:
-        for sym in doc.get("symbols") or []:
-            try:
-                raw = await fetch_history(session, sym, days)
-                candles = aggregate_candles(raw, tf)
-                del raw
-                if len(candles) < 50:
-                    per_symbol[sym] = {"error": "Zu wenig Daten"}
-                    continue
-                cur = rg.current_regime(model, candles, tf, conf_min, min_hold)
-                rid = cur.get("regime")
-                # {} = Baseline-Konfiguration ist gültig – nur bei UNBEKANNTEM Regime Fallback
-                cur["active_config"] = configs[rid] if rid in configs \
-                    else (doc.get("fallback_config") or {})
-                # Info: wie hätten die anderen Konfigurationen zuletzt abgeschnitten?
-                perf = []
-                for r in model.get("regimes") or []:
-                    c = configs.get(r["id"])
-                    if c is None:
-                        continue
-                    res = await asyncio.to_thread(
-                        simulate_pair, strategy, candles, sym,
-                        dict(scanner.settings), {**cfg_base, **c}, None, False, None, None)
-                    perf.append({"regime": r["id"], "label": r["label"],
-                                 "pnl": res.get("pnl"), "trades": res.get("trades"),
-                                 "win_rate": res.get("win_rate")})
-                perf.sort(key=lambda x: -(x.get("pnl") or 0))
-                cur["recent_performance"] = perf
-                per_symbol[sym] = cur
-            except Exception as e:  # noqa: BLE001 – pro Symbol isolieren
-                logger.warning(f"dynamic refresh {sym} failed: {e}")
-                per_symbol[sym] = {"error": str(e)[:200]}
-    return {"checked_at": datetime.now(timezone.utc).isoformat(),
-            "days": days, "per_symbol": per_symbol}
+async def _get_doc(did: str) -> Dict:
+    doc = await state.db.dynamic_strategies.find_one({"id": did})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Nicht gefunden")
+    return doc
 
 
 @router.post("/api/dynamic/{did}/refresh")
 async def dynamic_refresh(did: str, body: Dict = None):
-    doc = await state.db.dynamic_strategies.find_one({"id": did})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Nicht gefunden")
+    doc = await _get_doc(did)
     days = int(min(max(int((body or {}).get("days") or 30), 7), 90))
-    result = await _refresh_state(doc, days)
-    await state.db.dynamic_strategies.update_one(
-        {"id": did}, {"$set": {"last_state": result}})
-    return {"id": did, **result}
+    try:
+        res = await dynamic_live.check_one(doc, days, auto_apply=False)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": did, "switches": res["switches"], **res["state"]}
 
 
 @router.post("/api/dynamic/{did}/apply")
 async def dynamic_apply(did: str, _: bool = Depends(require_admin)):
-    """Aktive Regime-Konfiguration je Coin als Live/Paper-Override übernehmen
-    (nutzt den zuletzt per Refresh bestimmten Zustand)."""
-    from core.defaults import OPT_TRADE_KEYS
-    doc = await state.db.dynamic_strategies.find_one({"id": did})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Nicht gefunden")
-    last = doc.get("last_state") or {}
-    per_symbol = last.get("per_symbol") or {}
-    if not per_symbol:
-        raise HTTPException(status_code=400,
-                            detail="Erst 'Regime aktualisieren' ausführen, dann übernehmen")
-    sid = doc["strategy_id"]
-    now_iso = datetime.now(timezone.utc).isoformat()
-    applied = []
-    for sym, st in per_symbol.items():
-        cfg_r = (st or {}).get("active_config")
-        if cfg_r is None:
-            continue
-        if not cfg_r:
-            applied.append({"symbol": sym, "regime": st.get("regime"),
-                            "label": st.get("label"), "confidence": st.get("confidence"),
-                            "baseline": True})
-            continue
-        key = f"{sid}_{sym}"
-        prev = await state.db.strategy_coin_configs.find_one({"_id": key})
-        merged = dict((prev or {}).get("config", {}))
-        for k in OPT_TRADE_KEYS:
-            if cfg_r.get(k) is not None:
-                merged[k] = cfg_r[k]
-        merged["dynamic_applied"] = now_iso
-        merged["dynamic_id"] = did
-        merged["dynamic_regime"] = st.get("regime")
-        await state.db.strategy_coin_configs.replace_one(
-            {"_id": key}, {"_id": key, "config": merged}, upsert=True)
-        autotrader.config.setdefault("strategy_coin_configs", {})[key] = merged
-        applied.append({"symbol": sym, "regime": st.get("regime"),
-                        "label": st.get("label"), "confidence": st.get("confidence")})
-    await state.db.dynamic_strategies.update_one(
-        {"id": did}, {"$set": {"last_applied": now_iso, "last_applied_info": applied}})
-    return {"status": "success", "strategy_id": sid, "applied": applied}
+    """Aktive Regime-Konfiguration je Coin als Live/Paper-Override übernehmen."""
+    doc = await _get_doc(did)
+    try:
+        applied = await dynamic_live.apply_configs(doc)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "strategy_id": doc["strategy_id"], "applied": applied}
+
+
+@router.post("/api/dynamic/{did}/settings")
+async def dynamic_settings(did: str, body: Dict, _: bool = Depends(require_admin)):
+    """Auto-Prüfung im Hintergrund konfigurieren (Intervall, Auto-Übernahme)."""
+    doc = await _get_doc(did)
+    s = dict(doc.get("settings") or {})
+    if "auto_check_enabled" in body:
+        s["auto_check_enabled"] = bool(body["auto_check_enabled"])
+    if "auto_apply_enabled" in body:
+        s["auto_apply_enabled"] = bool(body["auto_apply_enabled"])
+    if body.get("check_interval_minutes") is not None:
+        s["check_interval_minutes"] = int(min(max(int(body["check_interval_minutes"]), 5), 1440))
+    if body.get("check_days") is not None:
+        s["check_days"] = int(min(max(int(body["check_days"]), 7), 90))
+    await state.db.dynamic_strategies.update_one({"id": did}, {"$set": {"settings": s}})
+    return {"status": "success", "settings": s}
+
+
+@router.get("/api/dynamic/{did}/log")
+async def dynamic_log(did: str, limit: int = 100):
+    """Wechsel-Protokoll: alle Regime-Wechsel mit Datum, Sicherheit & Begründung."""
+    rows = await state.db.dynamic_switch_log.find({"dynamic_id": did}) \
+        .sort("at", -1).to_list(int(min(max(limit, 1), 500)))
+    return {"log": [_clean(r) for r in rows]}
+
+
+@router.get("/api/learning/summary")
+async def learning_summary():
+    """Lern-Gedächtnis: welche Indikatoren/Strategien liefen je Marktphase am besten."""
+    return await learning.summary(state.db)

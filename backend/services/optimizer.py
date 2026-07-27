@@ -753,9 +753,9 @@ async def _collect_best_trades(job, result, mode, strategy, settings, cfg,
         for t in (res.get("all_trades") or []):
             rows.append({"strategy_id": sid, "strategy_name": name,
                          "symbol": sym, "timeframe": tf, **t})
-        if len(rows) >= 50000:
+        if len(rows) >= 25000:
             break
-    job["export_trades"] = rows[:50000]
+    job["export_trades"] = rows[:25000]
     result["export_meta"] = {"trades": len(job["export_trades"]),
                              "candidate_rank": (best or {}).get("rank") or 1}
 
@@ -763,7 +763,7 @@ async def _collect_best_trades(job, result, mode, strategy, settings, cfg,
 # ---------------- Modus 4: Dynamische Strategie (Regime-basiert) ----------------
 async def _run_dynamic(job, body, registry, settings, cfg, robust, full_histories,
                        tf, days, objective, min_trades, iterations, trade_space,
-                       should_stop) -> Dict:
+                       should_stop, db=None) -> Dict:
     """Dynamische Strategie: Regime erkennen (ohne Lookahead), pro Regime die
     Trade-Konfiguration optimieren und IMMER gegen die beste statische
     Konfiguration auf unbekannten Testdaten vergleichen."""
@@ -779,6 +779,8 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     conf_min = float(min(max(float(dcfg.get("confidence_min") or 70), 50), 95)) / 100.0
     min_hold_days = float(min(max(float(dcfg.get("min_hold_days") or 2), 0.25), 30))
     min_share = float(min(max(float(dcfg.get("min_share_pct") or 5), 1), 30))
+    rule_variants = bool(dcfg.get("rule_variants"))
+    variant_indicators = [i for i in (body.get("indicators") or []) if isinstance(i, str)]
     train_pct = robust["train_pct"] if robust["wf_enabled"] else 75.0
     if not trade_space:
         trade_space = build_trade_space({"tpsl": True, "leverage": True})
@@ -832,11 +834,40 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
             configs[r["regime"]] = static["config"]
             r["fallback"] = True
 
+    # Regel-Varianten je Regime (nur Custom-Strategien): eine zusätzliche Regel
+    # testen, Kandidaten nach Lern-Gedächtnis sortiert
+    strategies_by_regime: Dict[int, object] = {}
+    variants_info = {}
+    if rule_variants and getattr(strategy, "IS_CUSTOM", False):
+        weights = {}
+        if db is not None:
+            from services import learning
+            weights = await learning.indicator_weights(db)
+        for r in regime_results:
+            if r.get("insufficient"):
+                continue
+            job["phase"] = f"Regel-Varianten für Regime {r['regime'] + 1}: {r['label']}"
+            var = await dyn.optimize_regime_rules(
+                strategy, train_segs, r["regime"], settings, cfg, r["config"],
+                variant_indicators, min_tr_regime, r["metrics"], objective,
+                weights, 25, None, should_stop)
+            if var:
+                r["rule_variant"] = {k: var[k] for k in
+                                     ("rule_label", "metrics", "score", "improvement_pct")}
+                strategies_by_regime[r["regime"]] = _mk_strategy(var["definition"])
+                variants_info[str(r["regime"])] = {
+                    "rule_label": var["rule_label"], "rule_long": var["rule_long"],
+                    "rule_short": var["rule_short"],
+                    "improvement_pct": var["improvement_pct"]}
+    elif rule_variants:
+        variants_info = {"_note": "Regel-Varianten sind nur für Custom-Strategien "
+                                  "möglich – Basis-Strategien haben fest programmierte Regeln"}
+
     job["phase"] = "Out-of-Sample-Test: dynamisch vs. statisch auf unbekannten Daten"
     dyn_train_m, _ = await dyn.eval_dynamic(strategy, train_segs, configs, cfg,
-                                            settings, should_stop)
+                                            settings, should_stop, strategies_by_regime)
     dyn_test_m, _ = await dyn.eval_dynamic(strategy, test_segs, configs, cfg,
-                                           settings, should_stop)
+                                           settings, should_stop, strategies_by_regime)
     # Statisch auf Test: gleicher Segment-Mechanismus (fairer Vergleich mit Warmup)
     stat_test_segs = {}
     for s in full_histories:
@@ -858,10 +889,10 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     full_segs = dyn.build_segments(full_histories, labels_full)
     dyn.prepare_providers(strategy, full_segs, settings)
     full_m, full_rows = await dyn.eval_dynamic(strategy, full_segs, configs, cfg,
-                                               settings, should_stop)
+                                               settings, should_stop, strategies_by_regime)
     strat_name = getattr(strategy, "STRATEGY_NAME", sid)
     job["export_trades"] = [{"strategy_id": sid, "strategy_name": strat_name,
-                             "timeframe": tf, **t} for t in full_rows][:50000]
+                             "timeframe": tf, **t} for t in full_rows][:25000]
 
     # Modell fürs Speichern/Live schlank halten
     for r in regime_results:
@@ -879,6 +910,9 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
                          "switch_policy": "Beim Regimewechsel werden offene Positionen geschlossen"},
             "regimes": regime_results,
             "configs": {str(k): v for k, v in configs.items()},
+            "rule_variants": variants_info,
+            "base_definition": (strategy.definition
+                                if getattr(strategy, "IS_CUSTOM", False) else None),
             "static_benchmark": static,
             "comparison": {
                 "dynamic": {"train": dyn_train_m, "test": dyn_test_m},
@@ -1043,7 +1077,7 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
             dyn_res = await _run_dynamic(job, body, registry, settings, cfg, robust,
                                          full_histories, tf, days, objective,
                                          min_trades, iterations, trade_space,
-                                         cancelled)
+                                         cancelled, db)
             result.update(dyn_res)
             candidates, strategy_obj = [], None
         elif mode == "params":
@@ -1174,9 +1208,14 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
                 if job.get("export_trades"):
                     await db.optimizer_trades.insert_one(
                         {"job_id": job_id, "created_at": job["created_at"],
-                         "rows": job["export_trades"][:50000]})
+                         "rows": job["export_trades"][:25000]})
             except Exception as e:
                 logger.warning(f"optimizer persist failed: {e}")
+            try:
+                from services import learning
+                await learning.record_run(db, result)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"learning record failed: {e}")
     except JobCancelled:
         job["status"] = "cancelled"
         job["phase"] = "Abgebrochen"

@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKER_VERSION = "1.2.0"
+WORKER_VERSION = "1.3.0"
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "worker_config.json"
 
@@ -283,7 +283,7 @@ async def handle_optimizer(api, job_spec, index):
     relay.cancel()
     payload = {"kind": "optimizer", "status": job["status"], "error": job["error"],
                "result": job["result"], "best": job.get("best"),
-               "export_trades": (job.get("export_trades") or [])[:50000]}
+               "export_trades": (job.get("export_trades") or [])[:25000]}
     await api.post(f"/api/worker/job/{job_id}/result", payload, compress=True)
     for sym in (body.get("symbols") or []):
         if cc.persist_symbol(sym):

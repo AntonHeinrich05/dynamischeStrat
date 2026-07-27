@@ -11,6 +11,28 @@ export default function DynamicPanel() {
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState({});
   const [refreshDays, setRefreshDays] = useState(30);
+  const [logs, setLogs] = useState({});
+
+  const loadLog = async (id) => {
+    if (logs[id]) { setLogs(l => ({ ...l, [id]: null })); return; }
+    try {
+      const r = await fetch(`${API_URL}/api/dynamic/${id}/log`);
+      const d = await r.json();
+      setLogs(l => ({ ...l, [id]: d.log || [] }));
+    } catch { toast.error('Protokoll konnte nicht geladen werden'); }
+  };
+
+  const saveSettings = async (id, patch) => {
+    if (!isAdmin()) { toast.error('Admin-Login erforderlich'); return; }
+    try {
+      const r = await fetch(`${API_URL}/api/dynamic/${id}/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(patch),
+      });
+      if (!r.ok) { toast.error('Einstellung fehlgeschlagen'); return; }
+      load();
+    } catch { toast.error('Verbindungsfehler'); }
+  };
 
   const load = useCallback(() => {
     fetch(`${API_URL}/api/dynamic/list`).then(r => r.json())
@@ -95,10 +117,57 @@ export default function DynamicPanel() {
                     title="Aktive Regime-Konfiguration je Coin als Live/Paper-Override übernehmen">
                     <CheckCircle size={12} /> Konfiguration übernehmen
                   </button>
+                  <button className="opt-chip" onClick={() => loadLog(s.id)} data-testid={`dyn-log-${s.id}`}
+                    title="Wechsel-Protokoll: alle Regime-Wechsel mit Datum, Sicherheit und Begründung">
+                    Protokoll
+                  </button>
                   <button className="opt-chip" onClick={() => remove(s.id)} data-testid={`dyn-delete-${s.id}`}>
                     <Trash size={12} />
                   </button>
                 </div>
+                <div className="opt-small" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                  <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                    title="Prüft das Regime automatisch im Hintergrund und schreibt Wechsel ins Protokoll">
+                    <input type="checkbox" checked={!!s.settings?.auto_check_enabled}
+                      onChange={e => saveSettings(s.id, { auto_check_enabled: e.target.checked })}
+                      data-testid={`dyn-auto-check-${s.id}`} />
+                    Auto-Prüfung
+                  </label>
+                  {s.settings?.auto_check_enabled && (
+                    <>
+                      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>alle
+                        <select value={s.settings?.check_interval_minutes || 60}
+                          onChange={e => saveSettings(s.id, { check_interval_minutes: parseInt(e.target.value) })}
+                          data-testid={`dyn-interval-${s.id}`}>
+                          {[15, 30, 60, 180, 360, 720, 1440].map(m =>
+                            <option key={m} value={m}>{m >= 60 ? `${m / 60} h` : `${m} min`}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                        title="Bei einem erkannten Regime-Wechsel wird die passende Konfiguration automatisch als Coin-Override übernommen">
+                        <input type="checkbox" checked={!!s.settings?.auto_apply_enabled}
+                          onChange={e => saveSettings(s.id, { auto_apply_enabled: e.target.checked })}
+                          data-testid={`dyn-auto-apply-${s.id}`} />
+                        Auto-Übernahme bei Wechsel
+                      </label>
+                    </>
+                  )}
+                </div>
+                {logs[s.id] && (
+                  <div className="dyn-regime-state" data-testid={`dyn-log-body-${s.id}`}>
+                    <b>Wechsel-Protokoll</b>
+                    {logs[s.id].length === 0 && <div className="opt-small">Noch keine Regime-Wechsel protokolliert.</div>}
+                    {logs[s.id].slice(0, 20).map(e => (
+                      <div key={e.id} className="opt-small" style={{ margin: '3px 0' }}>
+                        {new Date(e.at).toLocaleString('de-DE')} · <b>{e.symbol?.replace('USDT', '')}</b>:
+                        {' '}{e.from_label || `Regime ${e.from_regime}`} → <b>{e.to_label || `Regime ${e.to_regime}`}</b>
+                        {' '}· Sicherheit {fmt(e.confidence, 0)}%
+                        {e.auto_applied && <span className="pos"> · automatisch übernommen</span>}
+                        <div style={{ color: '#8A8FA3' }}>{e.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {s.last_applied && <div className="opt-small">Zuletzt übernommen: {new Date(s.last_applied).toLocaleString('de-DE')}</div>}
                 {Object.entries(per).map(([sym, st]) => st.error ? (
                   <div key={sym} className="opt-small neg">{sym}: {st.error}</div>

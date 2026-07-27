@@ -79,27 +79,29 @@ def _provider_for(strategy, candles, settings, sym):
     try:
         fs = fast_sim.FastSeries(candles)
         if getattr(strategy, "IS_CUSTOM", False):
-            return fast_sim.build_signal_provider(strategy.definition, fs)
-        return fast_sim.build_builtin_signal_provider(strategy, fs, settings, sym)
+            return fast_sim.build_signal_provider(strategy.definition, fs), fs
+        return fast_sim.build_builtin_signal_provider(strategy, fs, settings, sym), fs
     except Exception:  # noqa: BLE001 – Fallback: normale Simulation
-        return None
+        return None, None
 
 
 def prepare_providers(strategy, segments: Dict[str, List[Dict]], settings: Dict):
     """Signal-Provider je Segment EINMAL bauen – Signale hängen nur von den
     Regeln ab, nicht von den Trade-Parametern, und werden für alle Kandidaten
-    wiederverwendet."""
+    wiederverwendet. Die FastSeries wird für Regel-Varianten mit gecacht."""
     for sym, segs in segments.items():
         for seg in segs:
-            seg["provider"] = _provider_for(strategy, seg["candles"], settings, sym)
+            seg["provider"], seg["fs"] = _provider_for(strategy, seg["candles"],
+                                                       settings, sym)
 
 
 def simulate_segment(strategy, seg: Dict, sym: str, settings: Dict, cfg: Dict,
-                     should_stop=None) -> List[Dict]:
+                     should_stop=None, provider=None) -> List[Dict]:
     """Ein Segment simulieren; nur Trades zählen, die IM Segment geöffnet wurden
     (Warmup-Trades werden verworfen)."""
     res = simulate_pair(strategy, seg["candles"], sym, settings, cfg,
-                        None, True, should_stop, seg.get("provider"))
+                        None, True, should_stop,
+                        provider if provider is not None else seg.get("provider"))
     start_iso = _iso(seg["start_ts"])
     return [t for t in (res.get("all_trades") or [])
             if (t.get("opened") or "") >= start_iso]
@@ -122,9 +124,10 @@ async def eval_regime_config(strategy, segments: Dict[str, List[Dict]], rid: int
 
 async def eval_dynamic(strategy, segments: Dict[str, List[Dict]],
                        configs: Dict[int, Dict], base_cfg: Dict, settings: Dict,
-                       should_stop=None) -> Tuple[Dict, List[Dict]]:
+                       should_stop=None, strategies_by_regime: Dict = None
+                       ) -> Tuple[Dict, List[Dict]]:
     """Komplette dynamische Simulation: jedes Segment mit der Konfiguration
-    seines Regimes; Ergebnis chronologisch zusammengeführt."""
+    (und ggf. Regel-Variante) seines Regimes; chronologisch zusammengeführt."""
     rows = []
     for sym, segs in segments.items():
         for seg in segs:
@@ -132,8 +135,18 @@ async def eval_dynamic(strategy, segments: Dict[str, List[Dict]],
                 raise JobCancelled()
             tp = configs.get(seg["regime"]) or {}
             cfg = {**base_cfg, **tp}
-            for t in await asyncio.to_thread(simulate_segment, strategy, seg, sym,
-                                             settings, cfg, should_stop):
+            st = (strategies_by_regime or {}).get(seg["regime"]) or strategy
+            provider = None
+            if st is not strategy:
+                provider = seg.get("_var_provider")
+                if provider is None and seg.get("fs") is not None:
+                    try:
+                        provider = fast_sim.build_signal_provider(st.definition, seg["fs"])
+                        seg["_var_provider"] = provider
+                    except Exception:  # noqa: BLE001
+                        provider = None
+            for t in await asyncio.to_thread(simulate_segment, st, seg, sym,
+                                             settings, cfg, should_stop, provider):
                 rows.append({**t, "symbol": sym, "regime": seg["regime"]})
     return metrics_from_rows(rows, base_cfg.get("max_capital", 100)), rows
 
@@ -189,7 +202,7 @@ async def optimize_static(strategy, full_train: Dict[str, List[Dict]], settings,
                           min_trades: int, progress=None, should_stop=None) -> Dict:
     """Statische Benchmark: beste EINZELNE Konfiguration auf den gesamten
     Trainingsdaten (gleiches Suchbudget wie ein Regime)."""
-    providers = {sym: _provider_for(strategy, c, settings, sym)
+    providers = {sym: _provider_for(strategy, c, settings, sym)[0]
                  for sym, c in full_train.items()}
 
     async def _eval(cfg):
@@ -216,6 +229,69 @@ async def optimize_static(strategy, full_train: Dict[str, List[Dict]], settings,
         if progress:
             progress(it + 1)
     return {"config": best_tp, "metrics": best_m, "score": round(best_sc, 3)}
+
+
+async def optimize_regime_rules(strategy, segments, rid: int, settings, base_cfg,
+                                config: Dict, indicators: List[str],
+                                min_trades: int, base_metrics: Dict,
+                                objective: str, weights: Dict[str, float] = None,
+                                max_candidates: int = 25, progress=None,
+                                should_stop=None) -> Optional[Dict]:
+    """Regel-Variante je Regime (nur Custom-Strategien): testet, ob EINE
+    zusätzliche Regel aus den gewählten Indikatoren die Performance in DIESEM
+    Regime deutlich verbessert (>10%). Kandidaten werden nach dem
+    Lern-Gedächtnis sortiert (historisch erfolgreiche Indikatoren zuerst)."""
+    if not getattr(strategy, "IS_CUSTOM", False):
+        return None
+    import copy
+    from services.optimizer import build_candidates, _mk_strategy
+    cands = build_candidates(indicators or None)
+    w = weights or {}
+    cands.sort(key=lambda c: -w.get(c["ind"], 1.0))
+    cands = cands[:max_candidates]
+    base_def = strategy.definition
+    cfg = {**base_cfg, **(config or {})}
+    base_sc = _score(base_metrics, objective)
+    best = None
+    for c in cands:
+        if should_stop and should_stop():
+            raise JobCancelled()
+        var_def = copy.deepcopy(base_def)
+        var_def["id"] = "opt_eval"
+        var_def.setdefault("long_rules", []).append(dict(c["long"]))
+        var_def.setdefault("short_rules", []).append(dict(c["short"]))
+        st_v = _mk_strategy(var_def)
+        rows = []
+        try:
+            for sym, segs in segments.items():
+                for seg in segs:
+                    if seg["regime"] != rid:
+                        continue
+                    prov = None
+                    if seg.get("fs") is not None:
+                        try:
+                            prov = fast_sim.build_signal_provider(var_def, seg["fs"])
+                        except Exception:  # noqa: BLE001
+                            prov = None
+                    rows.extend(await asyncio.to_thread(
+                        simulate_segment, st_v, seg, sym, settings, cfg,
+                        should_stop, prov))
+        except JobCancelled:
+            raise
+        except Exception:  # noqa: BLE001 – einzelne Kandidaten isolieren
+            continue
+        m = metrics_from_rows(rows, cfg.get("max_capital", 100))
+        if progress:
+            progress(1)
+        if m["trades"] < min_trades:
+            continue
+        sc = _score(m, objective)
+        if sc > base_sc * 1.1 + 1e-9 and (best is None or sc > best["score"]):
+            best = {"rule_label": c["label"], "rule_long": c["long"],
+                    "rule_short": c["short"], "definition": var_def,
+                    "metrics": m, "score": round(sc, 3),
+                    "improvement_pct": round((sc - base_sc) / max(abs(base_sc), 1e-9) * 100, 1)}
+    return best
 
 
 def build_verdict(dyn_test: Dict, stat_test: Dict, n_regimes: int,

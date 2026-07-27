@@ -58,6 +58,12 @@ async def start_optimizer(body: Dict, _: bool = Depends(require_admin)):
             raise HTTPException(status_code=503,
                                 detail="Kein lokaler Worker verbunden – Worker starten "
                                        "oder Cloud-Ausführung wählen")
+        if mode == "dynamic" and not local_exec.worker_supports_dynamic():
+            raise HTTPException(status_code=409,
+                                detail="Der verbundene lokale Worker ist veraltet und kennt den "
+                                       "Dynamik-Modus noch nicht. Bitte das Worker-Paket neu "
+                                       "herunterladen (Ausführung → Lokal → ⚙ Verwalten → Download), "
+                                       "den Worker neu starten – oder Cloud-Ausführung wählen.")
         job_id = opt.create_job(params)
         local_exec.enqueue_compute("optimizer", job_id, {
             "kind": "optimizer",
@@ -212,6 +218,19 @@ async def optimizer_equity(job_id: str, scope: str = "optimized"):
 async def _simulate_equity(job_id: str, scope: str):
     """Fallback/scope=all: Equity per Neu-Simulation (alte Läufe ohne
     gespeicherte Trades bzw. Robustheits-Check auf allen Coins)."""
+    result = await _load_optimizer_result(job_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Kein Ergebnis für diesen Lauf gefunden")
+    _days_guard = int(result.get("days") or 0)
+    _syms_guard = result.get("symbols") or []
+    _n_syms = 10 if scope == "all" else max(len(_syms_guard), 1)
+    if _days_guard > 120 or _days_guard * _n_syms > 900:
+        raise HTTPException(status_code=400,
+                            detail="Zu viele Daten für die Live-Simulation der Equity-Kurve "
+                                   "(RAM-Schutz des Servers). Neue Optimierungen speichern ihre "
+                                   "Trades automatisch – bitte den Lauf erneut ausführen (gern "
+                                   "lokal mit aktuellem Worker), dann lädt die Kurve sofort aus "
+                                   "den gespeicherten Daten.")
     from services.backtester import fetch_history, simulate_pair
     from services import backtester as bt_svc
     result = await _load_optimizer_result(job_id)
@@ -221,6 +240,12 @@ async def _simulate_equity(job_id: str, scope: str):
     tf = result.get("timeframe") or "1m"
     days = int(result.get("days") or 3)
     mode = result.get("mode") or "params"
+    if mode == "dynamic":
+        raise HTTPException(status_code=400,
+                            detail="Für dynamische Läufe kommt die Equity-Kurve aus den beim Lauf "
+                                   "gespeicherten Trades – dieser Lauf hat keine (vermutlich mit "
+                                   "veraltetem lokalen Worker berechnet). Bitte Worker-Paket neu "
+                                   "herunterladen und den Lauf wiederholen.")
     opt_symbols = list(result.get("symbols") or [])
     if scope == "all":
         symbols = list(TOP_10_COINS)

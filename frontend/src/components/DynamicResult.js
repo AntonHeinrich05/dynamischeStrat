@@ -26,7 +26,19 @@ export default function DynamicResult({ result, onSaved }) {
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  if (!dy) return null;
+  if (!dy) {
+    return (
+      <div className="dyn-verdict warn" data-testid="dyn-missing">
+        <b>Ergebnis unvollständig</b>
+        <div>
+          Dieser Dynamik-Lauf enthält keine Regime-Daten. Das passiert, wenn der Lauf von einer
+          veralteten lokalen Worker-Version berechnet wurde (sie kennt den Dynamik-Modus noch nicht).
+          Bitte das Worker-Paket neu herunterladen (Ausführung → Lokal → ⚙ Verwalten → Download),
+          den Worker neu starten und den Lauf wiederholen – oder Cloud-Ausführung wählen.
+        </div>
+      </div>
+    );
+  }
   const model = dy.model || {};
   const cmp = dy.comparison || {};
   const verdict = dy.verdict || {};
@@ -89,7 +101,16 @@ export default function DynamicResult({ result, onSaved }) {
                 <td className={`mono ${(r.metrics?.pnl || 0) >= 0 ? 'pos' : 'neg'}`}>{fmt(r.metrics?.pnl)}</td>
                 <td className="mono neg">{fmt(r.metrics?.max_drawdown)}</td>
                 <td className={`mono ${(r.baseline_metrics?.pnl || 0) >= 0 ? 'pos' : 'neg'}`}>{fmt(r.baseline_metrics?.pnl)}</td>
-                <td><div className="opt-params-list" style={{ margin: 0 }}>{cfgPills(r.insufficient ? dy.static_benchmark?.config : r.config)}</div></td>
+                <td><div className="opt-params-list" style={{ margin: 0 }}>
+                  {cfgPills(r.insufficient ? dy.static_benchmark?.config : r.config)}
+                  {r.rule_variant && (
+                    <span className="opt-param-pill" style={{ borderColor: 'rgba(124,255,178,0.5)' }}
+                      title={`Zusätzliche Regel verbessert dieses Regime um ${fmt(r.rule_variant.improvement_pct, 0)}% (${r.rule_variant.metrics?.trades} Trades, PnL ${fmt(r.rule_variant.metrics?.pnl)}). Gilt für Backtest/Analyse – Live nutzt Basis-Regeln + Trade-Parameter.`}
+                      data-testid={`dyn-variant-${r.regime}`}>
+                      +Regel: <b>{r.rule_variant.rule_label}</b> (+{fmt(r.rule_variant.improvement_pct, 0)}%)
+                    </span>
+                  )}
+                </div></td>
               </tr>
             ))}
           </tbody>
@@ -123,6 +144,7 @@ export default function DynamicResult({ result, onSaved }) {
       <div className="opt-small" style={{ margin: '6px 0' }}>
         Hinweis: {dy.settings?.switch_policy}. Regime mit weniger als {dy.settings?.min_trades_per_regime} Trades
         nutzen automatisch die statische Fallback-Konfiguration.
+        {dy.rule_variants?._note && <> {dy.rule_variants._note}.</>}
       </div>
 
       <div className="opt-save-row">

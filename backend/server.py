@@ -192,6 +192,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(start_scanner())
     asyncio.create_task(daily_reset_loop())
     asyncio.create_task(ai_engine.run_loop())
+    from services import dynamic_live
+    asyncio.create_task(dynamic_live.watch_loop())
 
     # BUGFIX (win-rate): re-hydrate the in-memory open_signal_evals from today's
     # still-open signals so evaluate_open_signals() can mark them as win/loss

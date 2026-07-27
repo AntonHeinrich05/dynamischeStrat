@@ -60,6 +60,21 @@ def worker_online() -> bool:
     return any(_now() - w.get("last_seen", 0) < WORKER_TIMEOUT for w in WORKERS.values())
 
 
+def worker_supports_dynamic() -> bool:
+    """Dynamik-Modus braucht Worker >= 1.3.0 (sonst würde er den Job als
+    Discovery interpretieren und ein unbrauchbares Ergebnis liefern)."""
+    for w in WORKERS.values():
+        if _now() - w.get("last_seen", 0) >= WORKER_TIMEOUT:
+            continue
+        try:
+            parts = tuple(int(x) for x in str(w.get("version") or "0").split("."))
+            if parts >= (1, 3):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def heartbeat(worker_id: str, body: Dict):
     w = WORKERS.setdefault(worker_id, {})
     for k in ("name", "version", "resources", "gpu", "data", "running_jobs", "sim_workers"):
@@ -311,7 +326,7 @@ async def apply_result(job_id: str, data: Dict, db):
             job["best"] = data["best"]
         rows_opt = data.get("export_trades") or []
         if rows_opt:
-            job["export_trades"] = rows_opt[:MAX_RESULT_TRADES]
+            job["export_trades"] = rows_opt[:25000]
         if status == "done" and db is not None:
             try:
                 await db.optimizer_runs.insert_one({"id": job_id, "params": job.get("params"),
@@ -320,9 +335,14 @@ async def apply_result(job_id: str, data: Dict, db):
                 if rows_opt:
                     await db.optimizer_trades.insert_one(
                         {"job_id": job_id, "created_at": job.get("created_at"),
-                         "rows": rows_opt[:MAX_RESULT_TRADES]})
+                         "rows": rows_opt[:25000]})
             except Exception as e:
                 logger.warning(f"local optimizer persist failed: {e}")
+            try:
+                from services import learning
+                await learning.record_run(db, job["result"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"learning record failed: {e}")
     else:  # Daten-Jobs
         if data.get("summary") is not None:
             job["summary"] = data["summary"]
