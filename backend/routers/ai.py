@@ -94,7 +94,11 @@ async def ai_chat(body: Dict, _: bool = Depends(require_admin)):
     async def gen():
         try:
             async for token in ai_engine.chat_stream(text, coins=coins):
-                yield f"data: {json.dumps({'t': token})}\n\n"
+                if isinstance(token, dict):
+                    # Strukturiertes Event (z.B. Lektions-Bestaetigung) unveraendert durchreichen
+                    yield f"data: {json.dumps(token)}\n\n"
+                else:
+                    yield f"data: {json.dumps({'t': token})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)[:200]})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
