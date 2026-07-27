@@ -22,14 +22,22 @@ LEARNING_SYSTEM = (
     "Trading-Performance aus, um besser zu werden. Sei brutal ehrlich und rein datenbasiert. "
     "Erkenne Muster: Welche Coins/Richtungen/Konfidenz-Level funktionieren, welche nicht? "
     "Passen SL/TP/Hebel zum beobachteten Verhalten (z.B. SL zu eng -> viele knappe Stop-Outs, "
-    "TP zu weit -> Gewinne drehen ins Minus)? Behalte bewährte alte Lektionen bei, verwirf "
-    "widerlegte, formuliere neue nur bei ausreichender Datenbasis. Bei sehr wenigen Daten "
-    "(<5 abgeschlossene Ergebnisse) sei zurückhaltend und markiere Lektionen als vorläufig. "
+    "TP zu weit -> Gewinne drehen ins Minus)? "
+    "WICHTIG zum Lektions-Gedaechtnis: Deine bisherigen Lektionen bleiben dauerhaft im "
+    "Kerngedaechtnis gespeichert und gelten fuer ALLE KI-Modelle. Gib im Feld 'lessons' NUR "
+    "NEUE oder AKTUALISIERTE Lektionen zurueck (gleicher Titel = Aktualisierung des Details). "
+    "Bestehende Lektionen musst du NICHT erneut auflisten - sie bleiben automatisch erhalten. "
+    "Nur wenn eine alte Lektion durch die Daten klar WIDERLEGT ist, trage ihren exakten Titel "
+    "in 'remove_lessons' ein, damit sie geloescht wird. "
+    "Behalte bewaehrte alte Lektionen bei, verwirf widerlegte, formuliere neue nur bei "
+    "ausreichender Datenbasis. Bei sehr wenigen Daten "
+    "(<5 abgeschlossene Ergebnisse) sei zurueckhaltend und markiere Lektionen als vorlaeufig. "
     "Antworte AUSSCHLIESSLICH mit validem JSON ohne Markdown, exakt in diesem Schema:\n"
-    '{"assessment": "3-6 Sätze ehrliche Selbsteinschätzung auf Deutsch", '
+    '{"assessment": "3-6 Saetze ehrliche Selbsteinschaetzung auf Deutsch", '
     '"lessons": [{"title": "Kurztitel", "detail": "konkrete, umsetzbare Regel auf Deutsch"}], '
+    '"remove_lessons": ["exakter Titel einer widerlegten Lektion"], '
     '"config_changes": [{"symbol": "BTCUSDT", "changes": {}, "reason": "kurz"}]}\n'
-    "config_changes nur angeben, wenn im Prompt ausdrücklich erlaubt – sonst leere Liste."
+    "config_changes nur angeben, wenn im Prompt ausdruecklich erlaubt - sonst leere Liste."
 )
 
 
@@ -123,7 +131,7 @@ def performance_to_text(stats: Dict) -> str:
         d = tr.get(m, {})
         if d.get("count"):
             lines.append(f"{label}-Trades: {d['count']} geschlossen, PnL {d['pnl']:+.2f} USDT, "
-                         f"Winrate {d['win_rate']}%, Ø {d['avg_pnl']:+.2f} USDT/Trade")
+                         f"Winrate {d['win_rate']}%, O {d['avg_pnl']:+.2f} USDT/Trade")
     if not tr.get("paper", {}).get("count") and not tr.get("live", {}).get("count"):
         lines.append("Trades: noch keine geschlossenen KI-Trades")
     ba = stats.get("by_action", {})
@@ -152,7 +160,7 @@ def performance_to_text(stats: Dict) -> str:
     if sym_parts:
         lines.append("Pro Coin: " + " | ".join(sym_parts[:13]))
     if stats.get("best_symbol"):
-        lines.append(f"Bester Coin (PnL): {stats['best_symbol']} | Schwächster: {stats.get('worst_symbol')}")
+        lines.append(f"Bester Coin (PnL): {stats['best_symbol']} | Schwaechster: {stats.get('worst_symbol')}")
     return "\n".join(lines)
 
 
@@ -181,8 +189,8 @@ class AILearning:
 
     # ---------------- outcome sync ----------------
     async def sync_outcomes(self) -> List[Dict]:
-        """Schreibt Signal-Ergebnisse & Trade-PnL zurück in ai_decisions.
-        Gibt die NEU geschlossenen KI-Trades zurück (Lern-Trigger)."""
+        """Schreibt Signal-Ergebnisse & Trade-PnL zurueck in ai_decisions.
+        Gibt die NEU geschlossenen KI-Trades zurueck (Lern-Trigger)."""
         try:
             sigs = await self.db.signals.find({
                 "strategy_id": "ai_trader",
@@ -236,7 +244,7 @@ class AILearning:
         try:
             return performance_to_text(await self.gather_stats())
         except Exception as e:
-            return f"(Performance-Daten nicht verfügbar: {str(e)[:80]})"
+            return f"(Performance-Daten nicht verfuegbar: {str(e)[:80]})"
 
     # ---------------- lessons ----------------
     async def get_lessons(self) -> List[Dict]:
@@ -244,10 +252,18 @@ class AILearning:
             await self.load_state()
         return self._lessons_cache or []
 
+    def _max_lessons(self) -> int:
+        """Maximale Anzahl dauerhaft gespeicherter Lektionen (Kerngedaechtnis)."""
+        try:
+            val = int(self.engine.config.get("max_lessons", 50) or 50)
+        except (TypeError, ValueError):
+            val = 50
+        return max(5, min(200, val))
+
     async def lessons_text(self) -> str:
         lessons = await self.get_lessons()
         if not lessons:
-            return "(noch keine Lektionen – zu wenige abgeschlossene Ergebnisse)"
+            return "(noch keine Lektionen - zu wenige abgeschlossene Ergebnisse)"
         return "\n".join(f"{i + 1}. {l.get('title')}: {l.get('detail')}"
                          for i, l in enumerate(lessons))
 
@@ -256,6 +272,7 @@ class AILearning:
             "enabled": bool(self.engine.config.get("learning_enabled", True)),
             "last_learn": self.last_learn,
             "lessons_count": len(self._lessons_cache or []),
+            "max_lessons": self._max_lessons(),
             "learning_now": self.learning_now,
         }
 
@@ -303,14 +320,14 @@ class AILearning:
                 f"- {t.get('symbol')} {t.get('side')} [{t.get('mode')}] Hebel {t.get('leverage')}x, "
                 f"PnL {pnl:+.2f} USDT{dur}"
                 + (f", Konfidenz {conf}%" if conf is not None else "")
-                + (f" | Begründung damals: {reason}" if reason else ""))
+                + (f" | Begruendung damals: {reason}" if reason else ""))
         return "\n".join(lines)
 
     async def run_learning(self, trigger: str = "manual") -> Dict:
         if self.learning_now:
-            return {"status": "busy", "detail": "Lernlauf läuft bereits"}
+            return {"status": "busy", "detail": "Lernlauf laeuft bereits"}
         if not self.engine.key:
-            return {"status": "error", "detail": "Kein API-Key für den aktiven Provider"}
+            return {"status": "error", "detail": "Kein API-Key fuer den aktiven Provider"}
         self.learning_now = True
         try:
             stats = await self.gather_stats()
@@ -319,36 +336,90 @@ class AILearning:
             old = await self.get_lessons()
             old_txt = "\n".join(f"- {l.get('title')}: {l.get('detail')}" for l in old) or "(keine)"
             directives = await self.engine._user_directives(10)
-            max_lessons = int(self.engine.config.get("max_lessons", 10))
+            max_lessons = self._max_lessons()
             autonomy = self.engine.config.get("autonomy", "suggest")
             autonomy_block = ""
             if autonomy in ("suggest", "auto"):
                 from services.ai_knowledge import tunable_spec_text
                 autonomy_block = (
-                    "\n\nDu DARFST zusätzlich datenbasierte Änderungen an deinen Trade-Einstellungen "
-                    "zurückgeben (Feld config_changes, max. 4; symbol \"ENGINE\" für "
+                    "\n\nDu DARFST zusaetzlich datenbasierte Aenderungen an deinen Trade-Einstellungen "
+                    "zurueckgeben (Feld config_changes, max. 4; symbol \"ENGINE\" fuer "
                     "min_confidence/cooldown_min). NIE max_capital oder mode.\n" + tunable_spec_text())
             prompt = (
                 f"=== PERFORMANCE-STATISTIK (letzte {stats.get('lookback_days')} Tage) ===\n{stats_txt}\n\n"
                 f"=== LETZTE GESCHLOSSENE TRADES (chronologisch) ===\n{outcomes_txt}\n\n"
-                f"=== BISHERIGE LEKTIONEN ===\n{old_txt}\n\n"
+                f"=== BISHERIGE LEKTIONEN (bleiben gespeichert) ===\n{old_txt}\n\n"
                 f"=== AKTUELLE TRADER-DIREKTIVEN ===\n{directives}\n\n"
-                f"Erstelle jetzt die aktualisierte Lektionsliste (max. {max_lessons} Lektionen)."
+                f"Aktuell sind {len(old)} von max. {max_lessons} Lektionen im Kerngedaechtnis. "
+                f"Gib im Feld 'lessons' NUR neue oder aktualisierte Lektionen zurueck "
+                f"(gleicher Titel = Aktualisierung). Bestehende bleiben automatisch erhalten. "
+                f"Trage in 'remove_lessons' nur exakte Titel klar widerlegter Lektionen ein."
                 f"{autonomy_block}"
             )
             raw, model_used = await self.engine._generate_json(prompt, LEARNING_SYSTEM)
             data = self.engine._parse_json(raw)
-            lessons = []
-            for l in (data.get("lessons") or [])[:max_lessons]:
+
+            # --- Neue/aktualisierte Lektionen aus der LLM-Antwort einsammeln ---
+            incoming: List[Dict] = []
+            for l in (data.get("lessons") or []):
                 if isinstance(l, dict) and l.get("title"):
-                    lessons.append({"title": str(l["title"])[:120],
-                                    "detail": str(l.get("detail", ""))[:400]})
+                    incoming.append({"title": str(l["title"])[:120],
+                                     "detail": str(l.get("detail", ""))[:400]})
+
+            # --- Titel, die explizit geloescht werden sollen (widerlegt) ---
+            remove_titles = set()
+            for rt in (data.get("remove_lessons") or []):
+                if isinstance(rt, str) and rt.strip():
+                    remove_titles.add(rt.strip().lower())
+
+            # --- MERGE: bestehende Lektionen behalten (nicht ueberschreiben!) ---
+            merged: List[Dict] = []
+            index_by_title: Dict[str, int] = {}
+            for l in old:
+                if not isinstance(l, dict) or not l.get("title"):
+                    continue
+                key = str(l["title"]).strip().lower()
+                if key in remove_titles:
+                    continue  # widerlegte Lektion loeschen
+                index_by_title[key] = len(merged)
+                merged.append({"title": str(l["title"])[:120],
+                               "detail": str(l.get("detail", ""))[:400]})
+
+            # --- Neue anhaengen / gleiche Titel aktualisieren ---
+            added, updated, skipped = 0, 0, 0
+            skipped_titles: List[str] = []
+            for l in incoming:
+                key = l["title"].strip().lower()
+                if key in remove_titles:
+                    continue
+                if key in index_by_title:
+                    merged[index_by_title[key]] = l  # Aktualisierung (zaehlt nicht gegen Limit)
+                    updated += 1
+                elif len(merged) < max_lessons:
+                    index_by_title[key] = len(merged)
+                    merged.append(l)  # neue Lektion anhaengen
+                    added += 1
+                else:
+                    # Option b: Maximum erreicht -> neue Lektion verwerfen + Warnung
+                    skipped += 1
+                    skipped_titles.append(l["title"])
+
+            if skipped:
+                logger.warning(
+                    f"AI learning: Lektions-Limit ({max_lessons}) erreicht, "
+                    f"{skipped} neue Lektion(en) verworfen: {skipped_titles}")
+
+            lessons = merged
+            removed_count = sum(1 for l in old
+                                if isinstance(l, dict) and l.get("title")
+                                and str(l["title"]).strip().lower() in remove_titles)
             assessment = str(data.get("assessment", ""))[:1200]
             now = _now_iso()
             await self.db.settings.update_one(
                 {"_id": "ai_lessons"},
                 {"$set": {"lessons": lessons, "assessment": assessment, "updated_at": now,
                           "trigger": trigger, "model": model_used,
+                          "max_lessons": max_lessons,
                           "stats": stats.get("totals", {})}},
                 upsert=True)
             self._lessons_cache = lessons
@@ -368,9 +439,21 @@ class AILearning:
                 "trigger": trigger, "model": model_used, "ts": now,
             })
             logger.info(f"AI learning done ({trigger}, {model_used}): "
-                        f"{len(lessons)} Lektionen, {len(cfg_results)} Config-Änderungen")
-            return {"status": "ok", "lessons": len(lessons), "assessment": assessment,
-                    "config_changes": len(cfg_results), "model": model_used}
+                        f"{len(lessons)}/{max_lessons} Lektionen gesamt "
+                        f"(+{added} neu, ~{updated} aktualisiert, -{removed_count} entfernt, "
+                        f"{skipped} verworfen), {len(cfg_results)} Config-Aenderungen")
+            result = {"status": "ok", "lessons": len(lessons),
+                      "lessons_added": added, "lessons_updated": updated,
+                      "lessons_removed": removed_count, "lessons_skipped": skipped,
+                      "max_lessons": max_lessons,
+                      "assessment": assessment,
+                      "config_changes": len(cfg_results), "model": model_used}
+            if skipped:
+                result["warning"] = (
+                    f"Maximum von {max_lessons} Lektionen erreicht - "
+                    f"{skipped} neue Lektion(en) wurden verworfen. "
+                    f"Erhoehe max_lessons oder lass die KI widerlegte Lektionen entfernen.")
+            return result
         except Exception as e:
             logger.error(f"AI learning failed: {e}")
             return {"status": "error", "detail": str(e)[:300]}
