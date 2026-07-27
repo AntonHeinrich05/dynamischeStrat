@@ -13,6 +13,12 @@ Grundsatz: Stabilität, Rückwärtskompatibilität, modulare Integration in best
 - Kern-Services: backtester.py (simulate_pair), optimizer.py (params/discovery/combo/dynamic), robustness.py (WF/DD/Konstanz/Stress/Stabilität/MC/Regime-Info), regime.py (NEU: K-Means-Regime-Erkennung), dynamic_strategy.py (NEU: Regime-Konfig-Optimierung + Benchmark-Vergleich)
 - Lokaler Worker: local_worker/worker.py spiegelt Cloud-Jobs (Optimizer/Backtest)
 
+## Umgesetzt (Session 28.07.2026 – Local-Worker-Stabilität, Nachlage v1.3.2)
+### Bugfix: Worker geht offline während der Simulation vorbereitet wird
+- Nach Fix v1.3.1 (Disk-IO in Thread) blieb das Problem: `run_optimizer`/`run_backtest` machen viel synchrone Numpy-/Pandas-Arbeit (FastSeries-Init über hunderttausende Kerzen, `aggregate_candles`, `gc.collect()`) direkt im Haupt-Event-Loop des Workers → Poll-Heartbeat fällt für Sekunden aus → Server markiert offline → nächster Start läuft auf Cloud.
+- Fix v1.3.2: neue Helferfunktion `_run_isolated(coro_factory)` startet die komplette Rechen-Coroutine in einem **eigenen Thread mit eigener Event-Loop** (`asyncio.to_thread` + `loop.run_until_complete`). Der Haupt-Loop des Workers ist damit während der Simulation völlig frei und pollt stabil weiter.
+- Angewendet in `handle_backtest` und `handle_optimizer`. Cancel-Flag und Progress bleiben unverändert (Shared-Dict `opt.JOBS`/`bt.JOBS`).
+
 ## Umgesetzt (Session 28.07.2026 – Local-Worker-Stabilität)
 ### Bugfix: Worker trennt sich beim Laden großer Kerzen-Caches
 - Symptom: Nach dem Laden lokal gespeicherter Kerzen (gzip+pickle) für einen Strategie-Test war die asyncio-Loop des Workers je Symbol mehrere Sekunden blockiert → Heartbeat fiel aus → Server markierte den Worker als offline → nächster Strat-Test lief über die Cloud statt lokal.

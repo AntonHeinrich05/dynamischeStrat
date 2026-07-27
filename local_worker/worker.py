@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKER_VERSION = "1.3.1"
+WORKER_VERSION = "1.3.2"
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "worker_config.json"
 
@@ -244,16 +244,39 @@ async def _relay_progress(api, job_id, job, extra_best=False):
         await asyncio.sleep(1.2)
 
 
+def _run_isolated(coro_factory):
+    """Startet eine Coroutine in einem eigenen Thread mit eigener Event-Loop.
+    Wichtig: Die Rechenjobs (run_optimizer/run_backtest) enthalten synchronen
+    Numpy-/Pandas-Code (FastSeries-Init über hunderttausende Kerzen,
+    aggregate_candles, gc.collect()), der die Loop mehrere Sekunden blockiert.
+    Läuft er im Haupt-Loop, fällt in der Zeit der Poll-Heartbeat aus und der
+    Server markiert den Worker als offline. In einem separaten Thread kann der
+    Poll-Loop völlig ungestört weiter Pings senden."""
+    def _target():
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro_factory())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+            asyncio.set_event_loop(None)
+    return asyncio.to_thread(_target)
+
+
 async def handle_backtest(api, job_spec, index):
     job_id = job_spec["job_id"]
     a = job_spec["payload"]["args"]
     registry_mod.registry.load_custom(job_spec["payload"].get("custom_definitions") or [])
     job = _mk_job(bt.JOBS, job_id)
     logger.info(f"Backtest {job_id}: {a['strategy_ids']} auf {a['symbols']} ({a['days']} Tage)")
-    task = asyncio.create_task(bt.run_backtest(
+    # Rechnung in eigenem Thread/Loop -> Poll-Heartbeat bleibt aktiv.
+    task = asyncio.create_task(_run_isolated(lambda: bt.run_backtest(
         job_id, a["strategy_ids"], a["symbols"], a["days"], a["cfg"],
         registry_mod.registry, a["settings"], None, a.get("strategy_configs"),
-        a.get("default_timeframe"), a.get("date_from"), a.get("date_to")))
+        a.get("default_timeframe"), a.get("date_from"), a.get("date_to"))))
     relay = asyncio.create_task(_relay_progress(api, job_id, job))
     await task
     relay.cancel()
@@ -276,8 +299,9 @@ async def handle_optimizer(api, job_spec, index):
     job["best"] = None
     body = a["body"]
     logger.info(f"Optimizer {job_id}: mode={body.get('mode')} auf {body.get('symbols')}")
-    task = asyncio.create_task(opt.run_optimizer(
-        job_id, body, registry_mod.registry, a["settings"], a["default_cfg"], None))
+    # Rechnung in eigenem Thread/Loop -> Poll-Heartbeat bleibt aktiv.
+    task = asyncio.create_task(_run_isolated(lambda: opt.run_optimizer(
+        job_id, body, registry_mod.registry, a["settings"], a["default_cfg"], None)))
     relay = asyncio.create_task(_relay_progress(api, job_id, job, extra_best=True))
     await task
     relay.cancel()
