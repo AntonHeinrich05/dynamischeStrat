@@ -313,8 +313,22 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
             if (!line.startsWith('data: ')) continue;
             try {
               const p = JSON.parse(line.slice(6));
-              if (p.t) { acc += p.t; setStreamText(acc); }
-              if (p.error) toast.error(p.error);
+              if (p.lesson) {
+                const ls = p.lesson;
+                const parts = [];
+                if (ls.lessons_added) parts.push(`+${ls.lessons_added} neu`);
+                if (ls.lessons_updated) parts.push(`~${ls.lessons_updated} aktualisiert`);
+                if (ls.lessons_removed) parts.push(`-${ls.lessons_removed} gelöscht`);
+                toast.success(
+                  `✅ Kerngedächtnis aktualisiert (${ls.lessons}/${ls.max_lessons}) · ${parts.join(', ')}`
+                );
+                if (ls.lessons_skipped) {
+                  toast.error(`⚠️ Limit ${ls.max_lessons} erreicht – ${ls.lessons_skipped} Lektion(en) verworfen`);
+                }
+                // Lernen-Panel + Verlauf sofort aktualisieren, damit die neue Lektion erscheint
+                loadInsights();
+                loadHistory();
+              }
             } catch (e) { /* skip */ }
           }
         }
