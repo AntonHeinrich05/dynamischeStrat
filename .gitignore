@@ -81,3 +81,9 @@ memory/test_credentials.md
 # Mobile development
 android-sdk/.workerdata/BTCUSDT.npy
 frontend/node_modules/.cache/default-development/5.pack
+.env
+.env.*
+*.env
+credentials.json
+*.key
+.credentials
