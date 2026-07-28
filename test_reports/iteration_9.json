@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 9 – Multi-Core Worker + Cloud-Regression Backend-Testing. Alle geforderten Szenarien grün. (A) Vom Auftrag verlangte Pytest-Suiten: 25/25 grün via `cd /app/backend && python -m pytest tests/test_multicore.py tests/test_local_worker.py tests/test_refactor_regression.py -q -n 0` (4.8s). (B) Neue E2E-Suite tests/test_iter9_e2e.py 8/8 grün (45s) über die öffentliche URL: Cloud-Backtest-Regression (2 Strategien × BTCUSDT × 2d -> done, per_strategy vorhanden, /api/backtest/equity liefert points, /api/backtest/export?kind=trades liefert CSV), Cloud-Optimizer params (rsi_only, BTC, 1d, 6 iter -> done mit best+top, baseline.metrics.trades > 0), Cloud-Optimizer discovery (indicators=[rsi,ema], max_rules=2 -> done, rules+steps vorhanden), Worker-Status (workers[0].sim_workers=8 int >=1, version==1.1.0), LOCAL Multi-Core Backtest (3 Strategien × BTC+ETH × 2026-07-20..22 -> done, 'parallel_sim: Pool mit N Prozessen' im /root/worker.log bestätigt), LOCAL Determinismus cpu_cores=1 vs cpu_cores=0 mit festem Datumsbereich (per_strategy metrics trades/pnl/win_rate EXAKT identisch, cpu_cores nach Test auf 0 zurückgesetzt), LOCAL Multi-Core Optimizer (rsi_only, BTC+ETH, 7d, 20 iter -> done, best+top), Abbruch Multi-Core (Discovery 90d 1m 4 Indikatoren, cancel nach 3s -> status=cancelled innerhalb <30s, danach kleiner lokaler Backtest läuft sauber durch = keine Pool-Leiche). Worker läuft die ganze Zeit stabil, /root/worker.log zeigt wiederholt 'Pool mit 8 Prozessen gestartet (…, fork)'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_e2e.py",
+    "/app/backend/tests/test_multicore.py",
+    "/app/backend/tests/test_local_worker.py",
+    "/app/backend/tests/test_refactor_regression.py",
+    "/app/test_reports/pytest/iter9_e2e.xml",
+    "/app/test_reports/pytest/iter9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "services/parallel_sim.py: Pool wird bei jedem Backtest/Optimizer neu erzeugt und wieder geschlossen (fork start-method). Für sehr viele kleine Iterationen (>>1000) könnte ein persistenter Pool auf Worker-Ebene den Setup-Overhead sparen; aktuell aber sauber gekapselt und deterministisch.",
+    "routers/backtest.py & routers/optimizer.py: Beide validieren `symbols` gegen TOP_10_COINS – der Body-Key heißt konsistent 'symbols' (nicht 'coins'), was in der Aufgabenbeschreibung als 'coins' bezeichnet ist. Test entsprechend angepasst; kein Bug, aber ein Hinweis für die Auftragsdokumentation.",
+    "Backtest-Local-Response liefert {'status':'started','job_id':...}, Cloud dagegen ebenfalls 'job_id'. Konsistent – gut. In der Aufgabenbeschreibung wurde 'id' genannt; Tests decken beide Keys ab für Robustheit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9_e2e.py",
+    "/app/test_reports/iteration_9.json"
+  ],
+  "success_rate": {"backend": "100% (25/25 pytest-suites + 8/8 iter9_e2e)", "frontend": "n/a (skip per Auftrag)"},
+  "test_credentials": "Admin / admin (Bearer via POST /api/auth/login).",
+  "seed_data_creation": "Keine neuen Seed-Daten. Determinismus-Test setzt cpu_cores=1, dann wieder =0 (Ausgangszustand).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Body-Key für Coins ist überall 'symbols' (nicht 'coins'); Response-Feld ist 'job_id'. /api/strategies liefert Dict {'strategies':[...], 'active':..., ...}. Lokaler Worker läuft dauerhaft (python worker.py, /root/worker.log, /root/lw_data mit BTCUSDT+ETHUSDT 90d 1m). Der Pod ist auf 2 CPU limitiert – Speedup ~1.7x ist erwartbar. Determinismus-Tests IMMER mit date_from/date_to (fester Zeitraum), nicht mit relativen 'days'. Jeweils nur 1 Backtest UND 1 Optimizer gleichzeitig (409 sonst) – daher /api/backtest/active und /api/optimizer/active vor jedem Start pollen (Helper _wait_no_active in test_iter9_e2e.py)."
+}

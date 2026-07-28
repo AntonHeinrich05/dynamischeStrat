@@ -1,0 +1,57 @@
+{
+  "summary": "Tested 3 new features: capital allocation modal + API, trades %-PnL + unified filter, optimizer scope=coins + override markers. Backend: 12/12 pytest passed. Frontend: all UI flows validated (capital modal, save, bw-alloc, pnl-filter replacement, optimizer override dot+legend).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/optimizer/overrides/{sid}", "issue": "Reads override state from in-memory autotrader.config.strategy_coin_configs which persists after DB delete_one, causing stale symbols in results until backend restart. Consider re-reading from DB or invalidating cache on delete."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CapitalModal.js", "issue": "Save button uses data-testid='capital-save-btn' but review request specifies 'capital-save-button'. Naming inconsistency — either doc or code should be aligned.", "selector": "[data-testid='capital-save-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Optimizer modal", "issues": ["React hydration warning in console: '<span> cannot be a child of <option>'. Non-blocking but should be fixed."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_capital_and_optimizer.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Align data-testid naming — either rename 'capital-save-btn' to 'capital-save-button' in code, or update the spec.",
+    "OPTIONAL: Fix optimizer_overrides endpoint to reflect DB state (avoid stale in-memory cache after cleanup/deletions).",
+    "OPTIONAL: Fix hydration warning '<span> child of <option>' in optimizer dropdowns."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2262 lines — should be split by domain (autotrade, optimizer, analytics, strategies).",
+    "optimizer_overrides reads from in-memory config only for strategy_coin_configs. Since DB is source of truth after cleanup, cached view can drift. Suggest either invalidating the in-memory entry on delete, or querying DB in the endpoint.",
+    "AutoTradeManager.allocated_capital: for live+percent when total is None, returns None -> UI shows blank; acceptable but worth documenting.",
+    "Capital POST validation good (scope/mode/value); consider adding upper bound on base_balance."
+  ],
+  "updated_files": ["/app/backend/tests/test_capital_and_optimizer.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin/admin (JWT via /api/auth/login)",
+  "seed_data_creation": "Inserted TEST_TRADE_PNLPCT into auto_trades to verify computed.pnl_pct (=2.5) and pnl_pct_capital (=25.0), then removed. Applied scope=coins override for scalping_4_rules/BTCUSDT then cleaned up (Mongo + backend restart to flush in-memory cache).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend restart is needed to clear autotrader.config.strategy_coin_configs cache after DB cleanup for optimizer overrides. The test file test_capital_and_optimizer.py contains full regression suite; run with `pytest backend/tests/test_capital_and_optimizer.py -v -o addopts=''` to disable xdist (avoids race between parallel workers touching global paper allocation).",
+  "verified_features": [
+    "GET /api/autotrade/capital returns allocation with live+paper (mode/value/allocated/used_margin/free)",
+    "POST /api/autotrade/capital validates scope, mode, fixed>0, 0<percent<=100, requires admin JWT",
+    "Paper percent mode: base 1000 * 25% = allocated 250.0 (verified via both /capital and /balance)",
+    "GET /api/autotrade/balance includes 'allocation' object with live & paper",
+    "GET /api/autotrade/trades: _enrich_trade adds computed.pnl_pct (2.5) and computed.pnl_pct_capital (25.0)",
+    "POST /api/optimizer/apply scope=coins persists to strategy_coin_configs + coin_params; overrides endpoint returns BTCUSDT",
+    "POST /api/optimizer/apply scope=coins without symbols -> 400",
+    "POST /api/optimizer/apply scope=global (default) -> 200",
+    "Frontend: bitunix-balance-widget click opens capital-modal",
+    "Frontend: capital-tab-live/paper, capital-mode-full/fixed/percent, capital-percent-input, capital-preview all work",
+    "Frontend: validation at 150% shows capital-validation-error 'Prozentsatz muss zwischen 1 und 100 liegen' and disables save",
+    "Frontend: after saving 25% paper, bw-alloc shows 'Bot 250.00 · frei 250.00'",
+    "Frontend: view-trades tab uses ONLY pnl-filter (pnl-filter-all/live/paper); old trade-filter and trade-filter-* are removed",
+    "Frontend: Paper filter shows 'PERFORMANCE JE STRATEGIE · PAPER' title",
+    "Frontend: optimizer-button opens optimizer with opt-override-dot-BTCUSDT + opt-override-legend when override present"
+  ]
+}

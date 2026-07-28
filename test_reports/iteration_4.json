@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 4 - Full-stack review of German daytrading upgrade (strategy backup export/import, auto-leverage in backtest/optimizer/live, per-strategy backtest definition override, equity chart+CSV, new day presets/date range, QoL localStorage persistence for Backtester+Optimizer, editable rules panel for custom strategies). 11/11 backend pytest tests green, all frontend flows (Backtester modal, Optimizer modal with 6 optimize groups incl. auto_leverage, StrategyBuilder export/import, StrategyAutoTradeModal auto-lev) working. QoL persistence (SOL + 30 Tage in Backtester, auto_leverage flag in Optimizer) confirmed to survive close/reopen.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global", "issues": ["Hydration warning: <span> inside <option> in bt-days select (Backtester line ~669) - option value labels wrap text in <span data-ve-dynamic>. Dev-only warning, no functional issue."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_export_import_autolev_equity.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "Optional: replace <option><span/></option> pattern in bt-days/opt-days selects to silence React hydration warning."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew to 2627 lines (was 2415) - continues to exceed 700-line guideline. Split into backup_api, backtest_api, optimizer_api, autotrade_api modules is overdue.",
+    "POST /api/strategies/import (require_admin) does NOT validate rule structure - malformed backup can inject arbitrary definition dict; consider Pydantic model for backup payload.",
+    "Backtester.js at 941 lines (>700 guideline); consider splitting cfg panel + equity + tools into subcomponents.",
+    "Optimizer trade_space keys 'auto_lev_value' contain mixed unit meanings (ticks vs %) - could produce nonsensical combos when auto_leverage group is optimized in isolation of mode; consider constrained sampling.",
+    "OPT_TRADE_KEYS is a Python tuple defined outside any model - drift risk with services/optimizer.py TRADE_SPACES."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4_export_import_autolev_equity.py",
+    "/app/test_reports/pytest/iter4_results.xml",
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (all data-testids present, all flows verified)"},
+  "test_credentials": "Admin/admin via POST /api/auth/login {username:'Admin', password:'admin'} - from /app/memory/test_credentials.md",
+  "seed_data_creation": "Test created strategy_coin_configs for custom_586f80d2 + BTCUSDT with auto_leverage_enabled=true, leverage=27, auto_lev_mode=liq_pct, auto_lev_value=0.5, auto_lev_max=40 (survives export/import roundtrip). rsi_only+BTCUSDT autotrade override set to auto_leverage_enabled=true, auto_lev_mode=liq_ticks, auto_lev_value=5, auto_lev_max=60, mode=off. Both are mode=off so no paper/live risk. localStorage bt_ui_state_v1/opt_ui_state_v1 populated with SOL+30 Tage / auto_leverage=true in the preview session.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "External URL: https://quant-station-1.preview.emergentagent.com. Admin: {username:'Admin', password:'admin'}. Custom strategy 'TestExport' (id custom_586f80d2) is present and has valid definition (long_rules, short_rules, indicators) - used for gear panel and definition override tests. Backtester QoL keys: bt_ui_state_v1 (JSON.stringify of {selectedStrategies, selectedCoins, days, dateMode, dateFrom, dateTo, autoLev, ...}). Optimizer QoL: opt_ui_state_v1. Backtest fast-path 2 days BTC rsi_only runs in ~5-10s; optimizer params 8 iterations ~10-15s; date_range 5-10d takes ~15-25s. IMPORTANT: /api/backtest/reset cancels ALL running backtest jobs across the process, so parallel pytest workers must NOT call it while another backtest is in flight. Optimizer runs simulate_pair in-process, does NOT touch bt.JOBS, so its tests should not call /api/backtest/reset. Pytest.ini pins -n 2 --dist loadscope, so class-level isolation is used. Enabled strategy tabs currently: scalping_4_rules, pbd_model, custom_586f80d2 (only these produce strategy-trade-toggle-* buttons and StrategyAutoTradeModal). Sat auto-lev field children (pct/ticks/value/max) only render when sat-auto-lev checkbox is checked AND mode!=off.",
+  "rca of the issue": "No open bugs. All 14 review request items verified: (1) backend export returns type=strategy_backup with definition/params/coin_cfgs/backtest_config; (2) import after delete restores 1:1 including per-coin auto-lev config; (3) backtest/run accepts auto_leverage_* + days<=1440 and returns pnl_pct/max_drawdown_pct + per_pair.avg_leverage; (4) date_from/date_to echoed in job.params; (5) strategy_configs.definition override runs; (6) equity endpoint returns points with t/equity/drawdown/side/symbol/liquidated + equity CSV; (7) optimizer new opt_flags (tpsl/breakeven/profit_secure/leverage/auto_leverage/sessions) accepted and returns best.trade_params + metrics.pnl_pct/max_drawdown_pct; (8) discovery optimizer returns trade_params; (9) autotrade per-coin auto_leverage persists. Frontend: bt-days has 540/720/900/1080/1440+custom; bt-auto-lev reveals mode/value/max; QoL persistence works (SOL+30d, opt auto_leverage); custom-strategy gear panel shows editable rules + indicator periods; opt-flag-* all 6 present; RAM info in Optimizer; StrategyBuilder export-strategy-{id} for all 11 strategies + import-strategy-btn; StrategyAutoTradeModal sat-auto-lev + children render when enabled and disables sat-leverage slider."
+}

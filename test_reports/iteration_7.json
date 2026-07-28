@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 7 - Full backend+frontend validation of the server.py -> routers/* refactor and the 6 bugfixes/features (timeframe single-source, no-liquidation, per-strategy trade settings in Backtester, custom-def-editor in Settings, duplicate button for custom strategies, optimizer sessions field). Backend: 12/12 tests green (8 refactor regression + 4 new iter7 review coverage incl. real fast-path backtest run with 0 liquidations + equity/export). Frontend: 24/24 UI assertions green on the external URL - all 5 removed Backtester globals absent, all 6 kept globals present, per-strategy gear panel exposes leverage/autolev/be/ps/tp1/tpfull/slmode/sessions for rsi_only, StrategyBuilder shows duplicate button on every custom strategy and clicking it creates a '(Kopie)' row (verified API-side independent copy with same rsi_period), Optimizer 'Zeitfenster (optional)' input present, edit-strategy-params-btn opens mode=strategy panel that renders <custom-def-editor> with editable long/short rules + indicator periods + save-definition-btn (persistence verified: rsi_period 14 -> 17 via GET /api/strategies).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_refactor_regression.py",
+    "/app/backend/tests/test_iter7_review.py",
+    "/app/test_reports/pytest/iter7_regression.xml",
+    "/app/test_reports/pytest/iter7_review.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backtester.py simulate_pair (SL clamp before liq): fix works for the fixed_percent SL path we tested (leverage 50x + sl_fixed 5% crash scenario -> 0 liquidations). Recommend adding an identical clamp for 'atr' and 'structure' SL modes if not already covered (unit test only exercises 'fixed').",
+    "routers/optimizer.py optimizer_apply forces definition.timeframe=body.timeframe and syncs settings.strategy_timeframes - good. But note: when the request body omits 'timeframe' the code should still guarantee consistency; currently the fallback is definition.timeframe, which is fine, but export path returns the SAME value in 3 keys, so if any consumer mutates only one of them (e.g. legacy autotrade code) drift can re-appear. Consider deriving the two secondary fields on-the-fly during /export instead of storing them 3x.",
+    "SettingsPanel.js custom-def-editor is only rendered when opened via edit-strategy-params-btn (mode='strategy'). The general gear (mode='general') hides Strategie/Zeitfenster tabs entirely - this is intentional but the two entry points are not obvious to users; consider a small link 'Regeln bearbeiten' also from the general settings view for discoverability.",
+    "StrategyBuilder.js duplicateStrategy uses window.confirm/alert-based fallback? Verified programmatically: clicking data-testid=duplicate-strategy-{id} POSTs /api/strategies/{id}/duplicate and refreshes list. Backend returns 400 for built-in ids as required."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_review.py",
+    "/app/test_reports/pytest/iter7_regression.xml",
+    "/app/test_reports/pytest/iter7_review.xml",
+    "/app/test_reports/iteration_7.json"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (24/24 UI assertions)"},
+  "test_credentials": "Admin/admin via POST /api/auth/login (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Created 1 custom strategy 'UI-Test-Custom' (tf=5m, rsi_period 14 -> edited to 17 to prove persistence) + 1 duplicate '(Kopie)' during UI test. Both DELETED via API at end - GET /api/strategies now returns 0 custom_* rows.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "External URL: https://trader-optimize-1.preview.emergentagent.com. Admin: Admin/admin. Two Settings entry points render DIFFERENT tab sets: header gear (settings-button) -> mode='general' (Steuerung + Telegram tabs only), strategy tab pen (edit-strategy-params-btn) -> mode='strategy' (Strategie + Zeitfenster tabs, includes custom-def-editor for is_custom strategies). Backtester gear (bt-cfg-toggle-{id}) is ONLY rendered when the strategy is selected in selStrats (bt-strat-{id} has class 'on'); if you need to test the panel, click bt-strat-{id} first. Backtester fast-path backtest with rsi_only completes in ~5s and returns 0 liquidations under 50x/5%-SL. Regression 8/8 + new 4/4 pytest in /app/backend/tests/. Existing 24 legacy failures in other test files are PRE-EXISTING (documented in review_request agent_to_agent_context_note) - do not report as new bugs."
+}

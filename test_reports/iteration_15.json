@@ -1,0 +1,32 @@
+{
+  "summary": "Iter15 verified the big CandleArray/numpy-columns refactor + new dynamic features. All 9 pytest cases passed (current-regime BTC 60d + ETH 30d + edge case; localworker required_version=1.4.0 + outdated flag; cloud backtest 90d + CSV exports (candles/trades) with populated rows; dynamic save/list with sub_strategies; local backtest 365d via connected worker (~seconds thanks to .npy cache); dynamic optimizer 180d/5m with per_regime_strategies=true producing regimes[].own_strategy.rules + sub_strategies + comparison + verdict, and with per_regime_strategies=false producing regimes[] without own_strategy.rules). Frontend UI: Optimizer -> mode dynamic -> dyn-per-regime visible; toggling it reveals dyn-max-rules-regime + dyn-start-from-base AND disables dyn-rule-variants (gating works). DynamicPanel opens live-regime-card; ETH/60d run returned live-regime-result ('ETH · Jetzt: Seitwärtsmarkt · Sicherheit 78%' + shares + timeline). LocalWorkerPanel shows Worker verbunden: TestPC v1.4.0, BTCUSDT 2.591.809 Kerzen, lw-outdated-warning is NOT visible (correct, worker current). DynamicResult component code inspected: 'Eigene Regeln' column is conditional on per_regime_strategies and 'Walk-Forward dieser Phase' row is present per regime.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Optimizer (dev warning only)", "issues": ["Legacy hydration warning: <span> cannot be a child of <option> (already flagged in iter13/14) - non-blocking dev instrumentation artefact."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15_refactor_candles.py",
+    "/app/test_reports/pytest/iter15_dyn.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Excellent refactor: CandleArray + numpy-columns hotpath dramatically speeds up backtests (local 365d completed in seconds; dynamic 180d finished full pipeline in ~10-12s per config).",
+    "backend/routers/dynamic.py: current-regime endpoint clamps days to [14,365] via min/max - callers passing days=1 succeed (clamped) instead of 400. Acceptable UX but consider explicit warning field in response so UI can show 'requested days was clamped'.",
+    "Optimizer.js still >1280 lines - refactor into DynamicSection/ModeCards/LearningSection subcomponents recommended (repeat suggestion from iter13).",
+    "Hydration warning about <span> child of <option> still present - impacts DevTools only but should be cleaned up in Optimizer.js DAY_OPTIONS select."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter15_refactor_candles.py"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (all selectors present + working)"},
+  "test_credentials": "Admin / admin (/app/memory/test_credentials.md)",
+  "seed_data_creation": "Ephemeral: one TEST_iter15_subs dynamic strategy created + deleted inside test. custom_3a7f5e25 'RSI Basis Test' left untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Local TestPC worker v1.4.0 is connected (BTCUSDT 2.591.809 1m candles = ~1800 days in /app/.workerdata). Worker must be restarted after backend code changes (imports at start). Backend endpoints for optimizer: POST /api/optimizer/run and GET /api/optimizer/status/{job_id}; for backtest: POST /api/backtest/run + GET /api/backtest/status/{job_id} + GET /api/backtest/export/{job_id}?kind=candles|trades. Login endpoint is POST /api/auth/login (NOT /api/admin/login). Cloud dynamic 180d/5m/2 indicators/iter=6 completes in ~10-12s each. The AutoTest Dyn (dyn_a6311aa5) seed strategy from iter13 still present.",
+  "rca of the issue": "N/A - all features working as designed."
+}

@@ -1,0 +1,412 @@
+{
+ "fast_vs_legacy": {
+  "rsi_only": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 261,
+    "pnl": -209.07,
+    "wins": 145,
+    "losses": 116,
+    "fees": 313.22,
+    "max_dd": 213.82,
+    "liq": 0,
+    "be_moved": 142,
+    "secs": 8.09
+   },
+   "fast": {
+    "trades": 261,
+    "pnl": -209.07,
+    "wins": 145,
+    "losses": 116,
+    "fees": 313.22,
+    "max_dd": 213.82,
+    "liq": 0,
+    "be_moved": 142,
+    "secs": 0.04
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0,
+   "speedup": 202.2
+  },
+  "macd_rsi_momentum": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 141,
+    "pnl": -221.16,
+    "wins": 63,
+    "losses": 78,
+    "fees": 169.2,
+    "max_dd": 224.49,
+    "liq": 0,
+    "be_moved": 60,
+    "secs": 13.64
+   },
+   "fast": {
+    "trades": 140,
+    "pnl": -227.41,
+    "wins": 61,
+    "losses": 79,
+    "fees": 168.0,
+    "max_dd": 230.74,
+    "liq": 0,
+    "be_moved": 58,
+    "secs": 0.02
+   },
+   "identical_trades": false,
+   "pnl_diff": 6.25,
+   "speedup": 682.0
+  },
+  "scalping_4_rules": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 0,
+    "pnl": 0,
+    "wins": 0,
+    "losses": 0,
+    "fees": 0,
+    "max_dd": 0.0,
+    "liq": 0,
+    "be_moved": 0,
+    "secs": 19.88
+   },
+   "fast": {
+    "trades": 0,
+    "pnl": 0,
+    "wins": 0,
+    "losses": 0,
+    "fees": 0,
+    "max_dd": 0.0,
+    "liq": 0,
+    "be_moved": 0,
+    "secs": 0.0
+   },
+   "identical_trades": true,
+   "pnl_diff": 0,
+   "speedup": 19880.0
+  },
+  "bollinger_reversion": {
+   "timeframe": "5m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 41,
+    "pnl": -3.79,
+    "wins": 24,
+    "losses": 17,
+    "fees": 49.21,
+    "max_dd": 25.0,
+    "liq": 0,
+    "be_moved": 23,
+    "secs": 3.7
+   },
+   "fast": {
+    "trades": 41,
+    "pnl": -3.79,
+    "wins": 24,
+    "losses": 17,
+    "fees": 49.21,
+    "max_dd": 25.0,
+    "liq": 0,
+    "be_moved": 23,
+    "secs": 0.01
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0,
+   "speedup": 370.0
+  },
+  "bollinger_squeeze": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 122,
+    "pnl": -154.2,
+    "wins": 61,
+    "losses": 61,
+    "fees": 146.4,
+    "max_dd": 156.69,
+    "liq": 0,
+    "be_moved": 60,
+    "secs": 24.63
+   },
+   "fast": {
+    "trades": 122,
+    "pnl": -154.2,
+    "wins": 61,
+    "losses": 61,
+    "fees": 146.4,
+    "max_dd": 156.69,
+    "liq": 0,
+    "be_moved": 60,
+    "secs": 0.02
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0,
+   "speedup": 1231.5
+  },
+  "ema_pullback_scalping": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 190,
+    "pnl": -231.66,
+    "wins": 91,
+    "losses": 99,
+    "fees": 228.03,
+    "max_dd": 231.66,
+    "liq": 0,
+    "be_moved": 88,
+    "secs": 3.88
+   },
+   "fast": {
+    "trades": 190,
+    "pnl": -231.07,
+    "wins": 91,
+    "losses": 99,
+    "fees": 228.03,
+    "max_dd": 231.07,
+    "liq": 0,
+    "be_moved": 88,
+    "secs": 0.03
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.59,
+   "speedup": 129.3
+  },
+  "stoch_reversal": {
+   "timeframe": "5m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 33,
+    "pnl": -70.14,
+    "wins": 12,
+    "losses": 21,
+    "fees": 39.62,
+    "max_dd": 70.14,
+    "liq": 0,
+    "be_moved": 11,
+    "secs": 6.05
+   },
+   "fast": {
+    "trades": 33,
+    "pnl": -70.14,
+    "wins": 12,
+    "losses": 21,
+    "fees": 39.62,
+    "max_dd": 70.14,
+    "liq": 0,
+    "be_moved": 11,
+    "secs": 0.0
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0,
+   "speedup": 6050.0
+  },
+  "vwap_reversion": {
+   "timeframe": "1m",
+   "has_fast_path": true,
+   "legacy": {
+    "trades": 69,
+    "pnl": -60.06,
+    "wins": 38,
+    "losses": 31,
+    "fees": 82.82,
+    "max_dd": 63.72,
+    "liq": 0,
+    "be_moved": 37,
+    "secs": 8.97
+   },
+   "fast": {
+    "trades": 69,
+    "pnl": -60.06,
+    "wins": 38,
+    "losses": 31,
+    "fees": 82.82,
+    "max_dd": 63.72,
+    "liq": 0,
+    "be_moved": 37,
+    "secs": 0.01
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0,
+   "speedup": 897.0
+  },
+  "ict_liquidity_sweep": {
+   "timeframe": "5m",
+   "has_fast_path": false,
+   "legacy": {
+    "trades": 1,
+    "pnl": -3.7,
+    "wins": 0,
+    "losses": 1,
+    "fees": 1.2,
+    "max_dd": 3.7,
+    "liq": 0,
+    "be_moved": 0,
+    "secs": 2.22
+   }
+  }
+ },
+ "custom_timeframe": {
+  "1m": {
+   "legacy": {
+    "trades": 275,
+    "pnl": -254.27,
+    "wins": 148,
+    "losses": 127,
+    "fees": 330.02,
+    "max_dd": 261.57,
+    "liq": 0,
+    "be_moved": 146,
+    "secs": 6.09
+   },
+   "fast": {
+    "trades": 275,
+    "pnl": -254.27,
+    "wins": 148,
+    "losses": 127,
+    "fees": 330.02,
+    "max_dd": 261.57,
+    "liq": 0,
+    "be_moved": 146,
+    "secs": 0.04
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0
+  },
+  "5m": {
+   "legacy": {
+    "trades": 95,
+    "pnl": -134.42,
+    "wins": 44,
+    "losses": 51,
+    "fees": 113.97,
+    "max_dd": 138.87,
+    "liq": 0,
+    "be_moved": 41,
+    "secs": 2.49
+   },
+   "fast": {
+    "trades": 95,
+    "pnl": -134.42,
+    "wins": 44,
+    "losses": 51,
+    "fees": 113.97,
+    "max_dd": 138.87,
+    "liq": 0,
+    "be_moved": 41,
+    "secs": 0.01
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0
+  },
+  "15m": {
+   "legacy": {
+    "trades": 36,
+    "pnl": -42.13,
+    "wins": 18,
+    "losses": 18,
+    "fees": 43.24,
+    "max_dd": 43.22,
+    "liq": 0,
+    "be_moved": 15,
+    "secs": 0.69
+   },
+   "fast": {
+    "trades": 36,
+    "pnl": -42.13,
+    "wins": 18,
+    "losses": 18,
+    "fees": 43.24,
+    "max_dd": 43.22,
+    "liq": 0,
+    "be_moved": 15,
+    "secs": 0.0
+   },
+   "identical_trades": true,
+   "pnl_diff": 0.0
+  }
+ },
+ "leverage": {
+  "10x": {
+   "trades": 261,
+   "pnl": -209.07,
+   "wins": 145,
+   "losses": 116,
+   "fees": 313.22,
+   "max_dd": 213.82,
+   "liq": 0,
+   "be_moved": 142,
+   "secs": 0.04
+  },
+  "100x": {
+   "trades": 261,
+   "pnl": -2079.47,
+   "wins": 145,
+   "losses": 116,
+   "fees": 3132.17,
+   "max_dd": 2127.01,
+   "liq": 2,
+   "be_moved": 142,
+   "secs": 0.04
+  }
+ },
+ "breakeven_modes": {
+  "off": {
+   "trades": 260,
+   "pnl": -205.38,
+   "wins": 145,
+   "losses": 115,
+   "fees": 312.02,
+   "max_dd": 209.8,
+   "liq": 0,
+   "be_moved": 0,
+   "secs": 0.04
+  },
+  "tp1": {
+   "trades": 261,
+   "pnl": -209.07,
+   "wins": 145,
+   "losses": 116,
+   "fees": 313.22,
+   "max_dd": 213.82,
+   "liq": 0,
+   "be_moved": 142,
+   "secs": 0.04
+  },
+  "crv": {
+   "trades": 293,
+   "pnl": -254.99,
+   "wins": 144,
+   "losses": 149,
+   "fees": 351.62,
+   "max_dd": 257.54,
+   "liq": 0,
+   "be_moved": 181,
+   "secs": 0.04
+  },
+  "profit_pct": {
+   "trades": 260,
+   "pnl": -205.38,
+   "wins": 145,
+   "losses": 115,
+   "fees": 312.02,
+   "max_dd": 209.8,
+   "liq": 0,
+   "be_moved": 0,
+   "secs": 0.04
+  },
+  "smart": {
+   "trades": 260,
+   "pnl": -204.93,
+   "wins": 145,
+   "losses": 115,
+   "fees": 312.02,
+   "max_dd": 209.34,
+   "liq": 0,
+   "be_moved": 142,
+   "secs": 0.04
+  }
+ }
+}

@@ -1,0 +1,39 @@
+{
+  "summary": "Iter13 tested bugfixes (worker-version-gate, OOM guard on /api/optimizer/equity, DynamicResult empty-state, Discovery indicator visibility) + features (rule-variants gating, dynamic-verwaltung settings/refresh/log, learning summary, auto-watcher _due unit). 14/14 pytest passed. Frontend UI verified: opt-mode-discovery shows 14 opt-ind-* chips, opt-mode-dynamic hides them, dyn-rule-variants checkbox reveals INDIKATOREN FÜR DIE REGEL-VARIANTEN section, dyn-panel-toggle opens seed 'AutoTest Dyn' card with dyn-auto-check-*, dyn-interval-*, dyn-auto-apply-*, dyn-log-* + dyn-log-body-* all rendering. One UI bug found: LearningPanel is imported in Optimizer.js but never rendered anywhere in the tree - learning-toggle button does NOT exist in DOM.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Optimizer.js / LearningPanel", "issue": "LearningPanel is imported at line 12 but never used - no <LearningPanel /> anywhere in JSX. As a result data-testid='learning-toggle' never appears in the DOM although the user story explicitly requires it in the Optimizer.", "selector": "[data-testid='learning-toggle']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "React hydration", "issues": ["Legacy warning: <span> cannot be a child of <option> (already noted in iter12)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_bugfixes_features.py",
+    "/app/test_reports/pytest/iter13.xml"
+  ],
+  "action_items": [
+    "Optimizer.js: actually render <LearningPanel /> (e.g., next to the history/dynamic-panel toggles) so data-testid='learning-toggle' and 'learning-body' become interactable. Currently imported but unused - dead code."
+  ],
+  "critical_code_review_comments": [
+    "Optimizer.js keeps growing (>1260 lines) - splitting DynamicSection, ModeCards, LearningSection into subcomponents would help maintainability.",
+    "worker_supports_dynamic() cleanly guards outdated workers (409) - good separation from worker_online (503). Consider adding a version string to the 409 detail so users know the required version.",
+    "OOM RAM-Guard uses simple heuristic (days>120 or days*symbols>900). Reasonable; alternative would be a candle-count estimation, but current thresholds match test payloads.",
+    "learning_memory writes are best-effort (try/except) - good; but consider TTL index to prevent unbounded growth."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter13_bugfixes_features.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "~90% - all core selectors present except learning-toggle (bug)"},
+  "test_credentials": "Admin / admin (/app/memory/test_credentials.md)",
+  "seed_data_creation": "Only ephemeral fake_big + fake_dyn Mongo docs inserted and immediately deleted inside their tests. AutoTest Dyn (dyn_a6311aa5) left intact as instructed.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Env has a REAL local worker connected (Anton-PC, version 1.3.0) reachable via /api/localworker/status. Therefore POST /api/optimizer/run with execution:'local' returns 200 (not 503) - unit test for worker_supports_dynamic() and worker_online() logic still covers the gate. The seeded dynamic strategy 'AutoTest Dyn' (id dyn_a6311aa5) has auto_check_enabled=true with 1 switch-log entry - reused for read-only tests. Fake optimizer_runs docs are auto-cleaned. Regarding full dynamic optimizer run (2-4 min, rule_variants) - not executed to save time; the run pipeline itself was already verified in iter12; iter13 focused on new gates/guards/UI.",
+  "rca of the issue": "LearningPanel bug: The main agent added LearningPanel.js and imported it in Optimizer.js but forgot to place <LearningPanel /> in the JSX. Fix: insert <LearningPanel /> alongside the DynamicPanel toggle (~near line 810-830 where history/dynamic panels are rendered)."
+}

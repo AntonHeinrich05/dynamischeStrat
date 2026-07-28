@@ -1,0 +1,26 @@
+{
+  "summary": "Verified win-rate bug fix and Optimizer 1m default. Backend rehydration + LONG win/loss evaluation and performance update all work. Frontend shows 100% (1) daily winrate for scalping_4_rules strategy and Optimizer opens with '1 Min' (1m) preselected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_winrate_bug.py", "/app/test_reports/pytest/winrate.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "evaluate_open_signals() does not sanity-check tp1/sl orientation for SHORT signals. In spec-test case 2 (SHORT with tp1=999999, sl=1) the price trivially satisfies price<=tp1 and is immediately marked 'win'. In real emission flow this is impossible because scanner enforces tp1<entry for SHORT, but arbitrary DB inserts / API insertions could poison stats. Consider a guard (LONG: tp1>entry & sl<entry, SHORT inverse) before rehydration.",
+    "server.py is 2270 lines – consider splitting endpoints, autotrade, analytics into separate modules per code-review guidelines (>700 line rule)."
+  ],
+  "updated_files": ["/app/backend/tests/test_winrate_bug.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin/admin (POST /api/auth/login)",
+  "seed_data_creation": "Inserted 3 TESTSIG-* signals for backend eval test and 1 TESTSIG-UIWIN for frontend UI check. All removed after tests; performance for BTCUSDT reset; backend restarted -> open_signal_evals empty.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend berlin_date currently 2026-07-21. Scanner tick every 12s. Rehydration message pattern: 'Re-hydrated N open signal evaluations from DB'. UI overview panel data-testid='view-overview'. Winrate line renders 'WIN-RATE (N)' where N = decided count. Optimizer opens via data-testid='optimizer-button' and shadcn select data-testid='opt-timeframe' has input_value '1m' as default.",
+  "rca of the issue": "Prior scanner emission used keys take_profit_1/stop_loss but the eval bookkeeping (process_signal + startup rehydration) only read tp1/sl -> nothing was ever appended to open_signal_evals -> results never set. Fix confirmed: fallback signal.get('tp1') or signal.get('take_profit_1') at both call sites. Verified end-to-end: on restart Backend logs 'Re-hydrated 3 open signal evaluations from DB'; DB updates result=win/loss and status=closed; GET /api/performance returns wins/losses counters."
+}

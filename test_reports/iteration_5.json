@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 5 - Focused test of the NEW equity-chart improvements: (a) per-coin selection + Top-3 preselect + default first-strategy filter + liquidations-marker OFF-by-default in Backtester, (b) new /api/optimizer/equity/{job_id} endpoint (scope=optimized|all) + new Optimizer UI toggle with 'Nur optimierte Coins' / 'Auch andere Coins prüfen' buttons. Backend: 5/5 pytest green (including 404 case + backtest-equity regression). Frontend: 7/7 Backtester assertions + 10/10 Optimizer assertions verified through Playwright. Two frontend 'fails' in the first run were test-selector issues on my end (data-testid^='equity-coin-' also matches parent 'equity-coin-chips' container) - re-inspected via screenshots, all UI behavior is correct.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Backtester/Optimizer (dev-only)", "issues": ["Recurring React hydration warning: <span data-ve-dynamic> inside <option> in bt-days / opt-days selects (already reported in iteration_4). Dev-only, no functional impact."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_optimizer_equity.py",
+    "/app/test_reports/pytest/iter5_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py optimizer_equity (line 2005+): for scope=all, days is taken from the stored result (which can be 360). The endpoint then does 10 * simulate_pair with the full history - a single call from a stale 360d run can take several minutes and eats memory. Consider capping days in the equity simulation (e.g. min(result.days, 30) with a note to the user) or streaming via SSE, otherwise a user clicking 'Auch andere Coins prüfen' on an old combo run will appear to hang.",
+    "server.py optimizer_equity: opens a fresh aiohttp.ClientSession per request and awaits sequentially per coin - trivial parallelization (asyncio.gather over per-symbol tasks) would give a big speedup for scope=all.",
+    "EquityChart.js line 40: `pointsProp ?? pointsFetched` - if the parent passes points=null on purpose (e.g. reset before refetch), the previous fetched points would still be shown. In Optimizer.loadEquity a `setEquityPoints(null)` before await would flash the empty state. Consider passing an explicit `loading` prop to avoid stale render between scope switches.",
+    "EquityChart.js line 88 (coin-top-3 useEffect): the initialization runs only once per points-load and does NOT re-run when the user changes the strategy filter. Effect: switching strategy shows old top-3 selected coins even if they have zero PnL in the new strategy. Consider resetting coinInitRef when stratFilter changes so top-3 is recomputed per strategy.",
+    "server.py optimizer_equity: no auth guard - matches other GET endpoints, but scope=all can run 30-90s of CPU-heavy simulation. Rate-limit or require_admin should be considered to prevent abuse.",
+    "server.py line 2038-2046 (discovery/combo path): rebuilds a CustomStrategy from `result.definition` but does not restore optimized `strategy_params` (best_params is always empty in that branch). If discovery ever exposes optimizable meta-params, they will be silently ignored here."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter5_optimizer_equity.py",
+    "/app/test_reports/pytest/iter5_results.xml",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (17/17 verified assertions after selector correction)"},
+  "test_credentials": "Admin/admin via POST /api/auth/login {username:'Admin', password:'admin'} - from /app/memory/test_credentials.md",
+  "seed_data_creation": "One quick optimizer run (params/rsi_only/BTCUSDT/1d/1m/5 iters) created via /api/optimizer/run to seed a fresh short result usable by the equity endpoint tests. Job persists in DB via optimizer_runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "External URL: https://quant-station-1.preview.emergentagent.com. Admin: {username:'Admin', password:'admin'}. IMPORTANT: pytest.ini pins `-n 2 --dist loadscope`; run new suites with `pytest tests/<file>.py -n 0` (NOT `-p no:xdist`). Also required_plugins includes pytest-xdist so it must stay installed. Backend equity endpoint: GET /api/optimizer/equity/{id}?scope=optimized|all - returns {job_id, scope, symbols, points[]} where each point has t/pnl/symbol/strategy_id/strategy_name/side/result/liquidated + backend-added equity/peak/drawdown. scope=all iterates over TOP_10_COINS with full history from result.days -> can be very slow if the last stored result had days=360. Frontend EquityChart accepts either jobId OR points prop. When points is used (Optimizer), csvHref=null disables the CSV button. Optimizer state: showEquity default false, equityScope default 'optimized', equityJobId set from either last DB result on open OR from a fresh completed poll. Backtester regressions: coin chip parent container has data-testid='equity-coin-chips' so `[data-testid^='equity-coin-']` matches the parent + all children - filter it out or use a more specific selector like `[data-testid^='equity-coin-USDT'] etc, or use the child button role. Top-3 preselection uses |PnL| ranking on the CURRENT strategy filter's PnL, and only initializes once per fresh load (see review comments).",
+  "rca of the issue": "No open bugs. All 5 backend endpoint contracts and all 8 frontend flow items from the review request verified. New optimizer/equity endpoint returns proper 404 on unknown id, correct scope=optimized (single BTC), and scope=all (full Top-10 with per-coin PnL badges: ADA -31.3, AVAX -34.5, BNB -14.5, BTC -10.0, DOGE -54.9, DOT +8.0, ETH -35.1, POL -29.2, SOL -17.6, XRP -28.4 in the sample run). Backtester equity chart: liq-marker default OFF, Top-3 coins auto-selected with PnL badges, 'alle an'/'alle aus' work, strategy filter only appears when >=2 strategies actually produced closed trades (rsi_only with 0 trades doesn't appear in the point set, so the filter dropdown hid - this is intentional). The two initial 'fails' were caused by my selector `[data-testid^=equity-coin-]` matching the parent chip-container as well; screenshots confirm both flows work perfectly."
+}
