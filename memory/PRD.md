@@ -45,6 +45,29 @@ in bestehende Architektur einfügen, sehr customizable.
    Regime-Bänder + Holdout-Linie + Legende), RegimeOptimizePanel.js (alle Optimizer-Einstellungen
    je Regime, Top-5 mit "Für dieses Regime übernehmen"), RegimeLab.css; Header-Button (ChartScatter).
 
+## Umgesetzt (28.07.2026, Teil 2) – Local-Worker-Support fürs Regime-Lab
+- Alle Regime-Lab-Jobs (Analyse, Regime-Strategie-Suche, Walk-Forward) laufen wahlweise
+  auf dem lokalen Worker: execution:"local" in analyze/optimize/walkforward.
+- services/local_exec.py: Job-Typ "regime_lab" (_get_job, apply_result mit serverseitiger
+  Persistierung via regime_lab.persist_worker_result), worker_supports_regime_lab(),
+  REQUIRED_WORKER_VERSION 1.5.0, Versions-Gate im claim() (alte Worker bekommen keine
+  regime_lab-Jobs – wichtig bei gemischter Flotte).
+- services/regime_lab.py: persist_analysis/persist_worker_result; run_analysis db-los fähig
+  (Worker schickt analysis_doc zurück). services/regime_opt.py: _load_doc (analysis_doc im
+  Payload statt Mongo), Persist-Guards, Multi-Core-Pool (_make_seg_pool über parallel_sim,
+  aktiv nur bei SIM_WORKERS>1 = lokaler Worker) für Optimierung UND Walk-Forward.
+- routers/regime_lab.py: execution-Branch, 503 ohne Worker, 409 mit Update-Hinweis bei
+  Worker < 1.5.0; Analyse-Doc (ohne chart) wird in den Job-Payload eingebettet.
+- local_worker/worker.py: Version 1.5.0, handle_regime_lab (alle 3 fn), Cancel-Handling.
+  Worker-Paket-Download bündelt services/*.py automatisch → Nutzer muss Paket 1x neu laden.
+- Frontend RegimeLab.js: Ausführungs-Toggle Cloud/Lokal (mit Online-Punkt, Zahnrad öffnet
+  LocalWorkerPanel), gilt für alle Regime-Lab-Jobs, in localStorage persistiert.
+- E2E real verifiziert: Test-Worker im Pod (v1.5.0) hat Analyse, Multi-Core-Optimierung
+  (8 Kerne) und Walk-Forward lokal gerechnet; Ergebnisse serverseitig persistiert; Jobs
+  gingen NICHT an den parallel verbundenen alten Nutzer-Worker (v1.4.1).
+- Iteration 3: Regression bestanden; 1 Frontend-Crash (execution nicht in AnalysisDetail
+  destrukturiert) gefixt und per Screenshot verifiziert.
+
 ## Backlog / Nächste Aufgaben (priorisiert)
 - P1: Walk-Forward des normalen Optimizers verbessern: mehr Zeit/Budget beim Indikator-Testen,
   sinnvollere Regel-Kombinationen (z.B. Trend+Volumen-Paare bevorzugen), bessere Ergebnisse

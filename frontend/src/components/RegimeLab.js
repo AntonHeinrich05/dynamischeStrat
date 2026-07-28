@@ -253,7 +253,7 @@ function BuildAndTest({ analysis, scope, symbol, strategies, jobBlocked, executi
 }
 
 // ---------------- Detail einer Analyse ----------------
-function AnalysisDetail({ analysis, strategies, jobBlocked, onChanged }) {
+function AnalysisDetail({ analysis, strategies, jobBlocked, execution, onChanged }) {
   const scopes = [];
   if (analysis.combined) scopes.push({ id: 'combined', label: 'Alle Coins (kombiniert)' });
   (analysis.symbols || []).forEach(s => {
