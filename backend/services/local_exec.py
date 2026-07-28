@@ -100,6 +100,11 @@ def heartbeat(worker_id: str, body: Dict):
 
 
 def workers_public() -> List[Dict]:
+    # Worker, die sich seit >30 min nicht gemeldet haben, verschwinden aus der
+    # Liste – sonst hängt eine alte Sitzung als Phantom-Eintrag im UI.
+    for wid in [w for w, v in WORKERS.items()
+                if _now() - v.get("last_seen", 0) > 1800]:
+        WORKERS.pop(wid, None)
     out = []
     for wid, w in WORKERS.items():
         out.append({

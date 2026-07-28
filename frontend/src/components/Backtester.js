@@ -659,7 +659,7 @@ export default function Backtester({ onClose }) {
                 if (e.target.value === 'custom') { setDateMode('custom'); }
                 else { setDateMode('days'); setDays(parseInt(e.target.value)); }
               }} data-testid="bt-days">
-              {DAY_OPTIONS.map(d => <option key={d} value={d}>{d} Tag{d > 1 ? 'e' : ''}</option>)}
+              {DAY_OPTIONS.map(d => <option key={d} value={d}>{`${d} Tag${d > 1 ? 'e' : ''}`}</option>)}
               <option value="custom">Benutzerdefiniert (Von–Bis)</option>
             </select>
           </label>

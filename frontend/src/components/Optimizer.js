@@ -530,7 +530,7 @@ export default function Optimizer({ onClose }) {
           </label>
           <label className="opt-field">Zeitraum
             <select value={days} onChange={e => setDays(parseInt(e.target.value))} data-testid="opt-days">
-              {DAY_OPTIONS.map(d => <option key={d} value={d}>{d} Tag{d > 1 ? 'e' : ''}</option>)}
+              {DAY_OPTIONS.map(d => <option key={d} value={d}>{`${d} Tag${d > 1 ? 'e' : ''}`}</option>)}
             </select>
           </label>
           <label className="opt-field">Zeitfenster (optional)
