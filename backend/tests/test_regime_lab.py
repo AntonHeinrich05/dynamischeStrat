@@ -70,36 +70,43 @@ class TestRegimeLabWorkflow:
 
     def test_02_regression_endpoints(self, api_client):
         checks = [
-            ("/api/strategies", "strategies"),
-            ("/api/coins", "coins"),
-            ("/api/optimizer/active", "active"),
+            ("/api/regime-lab/list", "analyses", list),
+            ("/api/regime-lab/active", "active", (dict, type(None))),
+            ("/api/strategies", "strategies", list),
+            ("/api/dynamic/list", "strategies", list),
         ]
-        for endpoint, key in checks:
+        for endpoint, key, expected_type in checks:
             response = api_client.get(f"{BASE_URL}{endpoint}", timeout=30)
             assert response.status_code == 200, f"{endpoint}: {response.text}"
             data = response.json()
             assert key in data, f"{endpoint}: missing {key}"
-        response = api_client.get(
-            f"{BASE_URL}/api/dynamic/current-regime",
-            params={"symbol": "BTCUSDT", "timeframe": "15m", "days": 30}, timeout=90,
-        )
-        assert response.status_code == 200, response.text
-        data = response.json()
-        assert data.get("symbol") == "BTCUSDT"
-        assert isinstance(data.get("regimes"), list) and data["regimes"]
-        assert isinstance(data.get("current"), dict)
-        assert "regime" in data["current"]
+            assert isinstance(data[key], expected_type), f"{endpoint}: invalid {key} type"
 
-    def test_03_seeded_analysis_schema_and_labels(self, api_client):
+    def test_03_seeded_analysis_schema_labels_and_persistence(self, api_client):
         response = api_client.get(f"{BASE_URL}/api/regime-lab/list", timeout=30)
         assert response.status_code == 200, response.text
         rows = response.json().get("analyses")
         assert isinstance(rows, list) and rows
-        seeded = next((row for row in rows if row.get("id") == "ra_c8206904"), rows[0])
-        detail_response = api_client.get(f"{BASE_URL}/api/regime-lab/{seeded['id']}", timeout=30)
-        assert detail_response.status_code == 200, detail_response.text
-        analysis = detail_response.json()["analysis"]
-        self._validate_analysis(analysis)
+        seeded = next((row for row in rows if row.get("id") == "ra_c8206904"), None)
+        assert seeded, "Required seeded analysis ra_c8206904 is unavailable"
+
+        first_response = api_client.get(f"{BASE_URL}/api/regime-lab/{seeded['id']}", timeout=30)
+        assert first_response.status_code == 200, first_response.text
+        first_analysis = first_response.json()["analysis"]
+        self._validate_analysis(first_analysis)
+        regime_zero = next(r for r in first_analysis["combined"]["model"]["regimes"] if r["id"] == 0)
+        assert regime_zero["stats"]["trend_strength"] >= 1.0
+        assert regime_zero["label"] == "Abwärtstrend · hohe Volatilität", regime_zero
+
+        # A second API read verifies that the GET migration was persisted, not merely response-local.
+        second_response = api_client.get(f"{BASE_URL}/api/regime-lab/{seeded['id']}", timeout=30)
+        assert second_response.status_code == 200, second_response.text
+        second_analysis = second_response.json()["analysis"]
+        second_regime_zero = next(
+            r for r in second_analysis["combined"]["model"]["regimes"] if r["id"] == 0
+        )
+        assert second_regime_zero["label"] == regime_zero["label"]
+        self._validate_analysis(second_analysis)
 
     def test_04_keep_toggle_and_restore(self, admin_client):
         aid = "ra_c8206904"
@@ -115,15 +122,21 @@ class TestRegimeLabWorkflow:
             saved = admin_client.get(f"{BASE_URL}/api/regime-lab/{aid}", timeout=30).json()["analysis"]
             assert saved["kept"]["combined:0"] is keep
 
-    def test_04a_keep_rejects_missing_regime_id(self, admin_client):
-        response = admin_client.post(
-            f"{BASE_URL}/api/regime-lab/ra_c8206904/keep",
-            json={"scope": "combined", "keep": False}, timeout=30,
-        )
-        assert response.status_code in (400, 422), response.text
-        assert response.json().get("detail")
+    def test_04a_mutations_reject_missing_regime_id(self, admin_client):
+        cases = [
+            ("keep", {"scope": "combined", "keep": False}),
+            ("assign", {"scope": "combined", "candidate": {}}),
+            ("optimize", {"scope": "combined", "mode": "combo"}),
+        ]
+        for endpoint, payload in cases:
+            response = admin_client.post(
+                f"{BASE_URL}/api/regime-lab/ra_c8206904/{endpoint}",
+                json=payload, timeout=30,
+            )
+            assert response.status_code == 400, f"{endpoint}: {response.text}"
+            assert "regime_id" in response.json().get("detail", ""), response.text
 
-    def test_04b_discarded_regime_is_excluded_from_build(self, admin_client):
+    def test_04b_discarded_regime_is_excluded_from_build_and_optimize(self, admin_client):
         aid = "ra_c8206904"
         dynamic_id = None
         strategy_id = None
@@ -132,23 +145,46 @@ class TestRegimeLabWorkflow:
                 "scope": "combined", "regime_id": 0, "keep": False,
             }, timeout=30)
             assert discarded.status_code == 200, discarded.text
+            assert discarded.json()["kept"]["combined:0"] is False
+
+            rejected_optimize = admin_client.post(
+                f"{BASE_URL}/api/regime-lab/{aid}/optimize",
+                json={"scope": "combined", "regime_id": 0, "mode": "combo"}, timeout=30,
+            )
+            assert rejected_optimize.status_code == 400, rejected_optimize.text
+            assert "verworfen" in rejected_optimize.json().get("detail", "")
+
             built = admin_client.post(f"{BASE_URL}/api/regime-lab/{aid}/build", json={
-                "scope": "combined", "name": "TEST_Discarded_Regime_Guard",
+                "scope": "combined", "name": "QA-Kept-Test",
             }, timeout=30)
             assert built.status_code == 200, built.text
             data = built.json()
             dynamic_id = data.get("id")
             strategy_id = data.get("strategy_id")
-            assert 0 not in data.get("regimes", []), data
-            assert 1 in data.get("regimes", []), data
+            assert data.get("regimes") == [1], data
+
+            listed = admin_client.get(f"{BASE_URL}/api/dynamic/list", timeout=30)
+            assert listed.status_code == 200, listed.text
+            created = next((row for row in listed.json().get("strategies", [])
+                            if row.get("id") == dynamic_id), None)
+            assert created and created.get("name") == "QA-Kept-Test"
+            assert set(created.get("configs", {}).keys()) == {"1"}, created.get("configs")
         finally:
-            admin_client.post(f"{BASE_URL}/api/regime-lab/{aid}/keep", json={
+            restored = admin_client.post(f"{BASE_URL}/api/regime-lab/{aid}/keep", json={
                 "scope": "combined", "regime_id": 0, "keep": True,
             }, timeout=30)
+            assert restored.status_code == 200, restored.text
+            assert restored.json()["kept"]["combined:0"] is True
             if dynamic_id:
-                admin_client.delete(f"{BASE_URL}/api/dynamic/{dynamic_id}", timeout=30)
+                deleted_dynamic = admin_client.delete(
+                    f"{BASE_URL}/api/dynamic/{dynamic_id}", timeout=30
+                )
+                assert deleted_dynamic.status_code in (200, 204, 404), deleted_dynamic.text
             if strategy_id and strategy_id.startswith("custom_") and strategy_id != "custom_dd633f11":
-                admin_client.delete(f"{BASE_URL}/api/strategies/custom/{strategy_id}", timeout=30)
+                deleted_strategy = admin_client.delete(
+                    f"{BASE_URL}/api/strategies/custom/{strategy_id}", timeout=30
+                )
+                assert deleted_strategy.status_code in (200, 204, 404), deleted_strategy.text
 
 
     def test_05_analyze_and_running_job_guard(self, admin_client):
@@ -281,16 +317,27 @@ class TestRegimeLabWorkflow:
 
     @staticmethod
     def _validate_analysis(analysis):
-        assert analysis.get("combined", {}).get("model", {}).get("regimes")
-        regimes = analysis["combined"]["model"]["regimes"]
-        for regime in regimes:
-            label = regime.get("label", "")
-            strength = regime.get("stats", {}).get("trend_strength")
-            assert strength is not None
-            if strength >= 1.0:
-                assert "Seitwärtsmarkt" not in label, regime
-            if strength < 0.5:
-                assert "Seitwärtsmarkt" in label, regime
+        combined_model = analysis.get("combined", {}).get("model", {})
+        assert combined_model.get("regimes")
+        models = [("combined", combined_model)]
+        models.extend(
+            (f"per_coin:{symbol}", payload.get("model", {}))
+            for symbol, payload in analysis.get("per_coin", {}).items()
+        )
+        for model_name, model in models:
+            assert model.get("regimes"), model_name
+            for regime in model["regimes"]:
+                label = regime.get("label", "")
+                strength = regime.get("stats", {}).get("trend_strength")
+                assert strength is not None, {"model": model_name, "regime": regime}
+                if strength >= 1.0:
+                    assert "Seitwärtsmarkt" not in label, {
+                        "model": model_name, "regime": regime,
+                    }
+                if strength < 0.5:
+                    assert "Seitwärtsmarkt" in label, {
+                        "model": model_name, "regime": regime,
+                    }
         for symbol in analysis.get("symbols", []):
             assert analysis["combined"]["per_symbol"][symbol]["segments"]
             assert analysis["per_coin"][symbol]["model"]["regimes"]

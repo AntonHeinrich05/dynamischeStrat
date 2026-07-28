@@ -30,6 +30,13 @@ def _guard_no_running():
                             detail=f"Es läuft bereits ein Regime-Lab-Job ({j['kind']})")
 
 
+def _regime_id_or_400(body: Dict) -> int:
+    rid = body.get("regime_id")
+    if rid is None or not str(rid).lstrip("-").isdigit():
+        raise HTTPException(status_code=400, detail="regime_id (Zahl) erforderlich")
+    return int(rid)
+
+
 async def _get_doc(aid: str) -> Dict:
     doc = await state.db.regime_analyses.find_one({"id": aid})
     if not doc:
@@ -114,7 +121,19 @@ async def run_result(job_id: str):
 
 @router.get("/api/regime-lab/{aid}")
 async def get_analysis(aid: str):
-    return {"analysis": _clean(await _get_doc(aid))}
+    doc = await _get_doc(aid)
+    # Label-Migration: ältere Analysen auf die aktuelle Beschriftungs-Logik heben
+    from services import regime as rg
+    changed = False
+    comb_model = ((doc.get("combined") or {}).get("model"))
+    if comb_model and rg.relabel_regimes(comb_model):
+        changed = True
+    for pc in (doc.get("per_coin") or {}).values():
+        if pc.get("model") and rg.relabel_regimes(pc["model"]):
+            changed = True
+    if changed:
+        await state.db.regime_analyses.replace_one({"id": aid}, doc)
+    return {"analysis": _clean(doc)}
 
 
 @router.delete("/api/regime-lab/{aid}")
@@ -131,7 +150,7 @@ async def keep_regime(aid: str, body: Dict, _: bool = Depends(require_admin)):
     der Strategie-Suche und beim Zusammenbau übersprungen)."""
     doc = await _get_doc(aid)
     key = f"{lab.scope_key(body.get('scope') or 'combined', body.get('symbol'))}:" \
-          f"{int(body.get('regime_id'))}"
+          f"{_regime_id_or_400(body)}"
     kept = dict(doc.get("kept") or {})
     kept[key] = bool(body.get("keep", True))
     await state.db.regime_analyses.update_one({"id": aid}, {"$set": {"kept": kept}})
@@ -142,9 +161,13 @@ async def keep_regime(aid: str, body: Dict, _: bool = Depends(require_admin)):
 async def start_regime_optimize(aid: str, body: Dict, _: bool = Depends(require_admin)):
     """Strategie-Discovery/Optimierung NUR für ein ausgewähltes Regime dieser
     Analyse (alle Optimizer-Einstellungen verfügbar)."""
-    await _get_doc(aid)
-    if body.get("regime_id") is None:
-        raise HTTPException(status_code=400, detail="regime_id erforderlich")
+    doc = await _get_doc(aid)
+    rid = _regime_id_or_400(body)
+    kept_key = f"{lab.scope_key(body.get('scope') or 'combined', body.get('symbol'))}:{rid}"
+    if (doc.get("kept") or {}).get(kept_key) is False:
+        raise HTTPException(status_code=400,
+                            detail="Dieses Regime wurde verworfen – erst wieder auf "
+                                   "'behalten' setzen")
     mode = body.get("mode") or "combo"
     if mode not in ("params", "discovery", "combo"):
         raise HTTPException(status_code=400, detail="mode muss params|discovery|combo sein")
@@ -169,7 +192,8 @@ async def assign_regime_strategy(aid: str, body: Dict, _: bool = Depends(require
     remove=true wieder entfernen)."""
     doc = await _get_doc(aid)
     scope = body.get("scope") or "combined"
-    key = f"{lab.scope_key(scope, body.get('symbol'))}:{int(body.get('regime_id'))}"
+    rid = _regime_id_or_400(body)
+    key = f"{lab.scope_key(scope, body.get('symbol'))}:{rid}"
     assignments = dict(doc.get("assignments") or {})
     if body.get("remove"):
         assignments.pop(key, None)
@@ -177,9 +201,9 @@ async def assign_regime_strategy(aid: str, body: Dict, _: bool = Depends(require
         cand = body.get("candidate") or {}
         model = lab.model_for(doc, scope, body.get("symbol")) or {}
         reg = next((r for r in model.get("regimes") or []
-                    if r["id"] == int(body.get("regime_id"))), {})
+                    if r["id"] == rid), {})
         assignments[key] = {
-            "regime_id": int(body.get("regime_id")),
+            "regime_id": rid,
             "regime_label": reg.get("label"),
             "mode": cand.get("mode"),
             "strategy_id": cand.get("strategy_id"),

@@ -132,6 +132,33 @@ def _label_de(f_mean, vol_z: float) -> str:
     return f"{t} · {v}"
 
 
+def relabel_regimes(model: Dict) -> bool:
+    """Gespeicherte Modelle auf die aktuelle Label-Logik heben (Migration ohne
+    Neu-Clustern). Nutzt die ROHEN Feature-Mittelwerte je Regime; liefert True,
+    wenn sich mindestens ein Label geändert hat."""
+    changed = False
+    mean = model.get("norm_mean") or [0.0] * 4
+    std = model.get("norm_std") or [1.0] * 4
+    for r in model.get("regimes") or []:
+        f = r.get("features") or {}
+        fm = [float(f.get("trend_pct") or 0.0), float(f.get("vol_pct") or 0.0),
+              float(f.get("efficiency") or 0.0), float(f.get("rel_volume") or 1.0)]
+        vol_z = (fm[1] - float(mean[1])) / max(float(std[1]), 1e-9)
+        new_label = _label_de(fm, vol_z)
+        if new_label != r.get("label"):
+            r["label"] = new_label
+            changed = True
+        if "stats" not in r:
+            lb = float(model.get("lookback_days") or 1.0)
+            r["stats"] = {"trend_pct": round(fm[0], 3),
+                          "trend_pct_per_day": round(fm[0] / max(lb, 1e-9), 3),
+                          "vol_pct": round(fm[1], 3),
+                          "efficiency": round(fm[2], 3),
+                          "trend_strength": round(abs(fm[0]) / max(fm[1], 1e-9), 2)}
+            changed = True
+    return changed
+
+
 def detect_regimes(histories: Dict[str, List[Dict]], timeframe: str,
                    max_regimes: int = DEFAULT_MAX_REGIMES,
                    lookback_days: float = DEFAULT_LOOKBACK_DAYS,

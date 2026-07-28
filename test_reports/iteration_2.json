@@ -1,0 +1,31 @@
+{
+  "summary": "Backend-only Regime-Lab bugfix retest completed against the public URL. All 4 focused pytest cases passed: label migration/invariants, kept filtering plus optimize rejection and cleanup, missing-regime_id validation on three endpoints, and four regression smoke APIs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regime_lab.py",
+    "/app/test_reports/pytest/regime_lab_retest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_regime_lab.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "100% (4/4 focused tests)",
+    "frontend": "Not requested"
+  },
+  "seed_data_creation": "Created QA-Kept-Test dynamic strategy and its temporary generated custom base strategy during each focused run; both were deleted. Also removed leftover custom_c76517fb (Kept-Filter-Test basis) from prior manual verification. ra_c8206904 was preserved and combined:0 was restored to kept=true. Dynamic strategy list is empty after cleanup.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Focused retest passed twice. Final ra_c8206904 state: kept combined:0=true; assignments combined:0 and combined:1 preserved; regime 0 label is 'Abwärtstrend · hohe Volatilität' with trend_strength 1.18. GET list/active/strategies/dynamic-list all returned 200 with expected response types.",
+  "rca_of_the_issue": "Verified fixes address the Iteration 1 causes: GET relabels stored combined/per-coin models and persists changes; _assignment_items now excludes kept=false assignments and optimize checks the same kept key; _regime_id_or_400 converts missing/invalid IDs into controlled HTTP 400 responses before endpoint logic proceeds."
+}

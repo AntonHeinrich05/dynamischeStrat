@@ -247,11 +247,18 @@ async def run_regime_optimizer(job_id: str, body: Dict, registry, settings: Dict
 
 # ---------------- Finaler Walk-Forward der zusammengestellten Strategie ----------------
 def _assignment_items(doc: Dict, scope: str, symbol: str) -> Dict[int, Dict]:
+    """Bestätigte Zuordnungen eines Bereichs – verworfene Regime (kept=false)
+    werden übersprungen."""
     key = lab.scope_key(scope, symbol)
+    kept = doc.get("kept") or {}
     out = {}
     for k, a in (doc.get("assignments") or {}).items():
-        if k.startswith(key + ":"):
-            out[int(k.rsplit(":", 1)[1])] = a
+        if not k.startswith(key + ":"):
+            continue
+        rid = int(k.rsplit(":", 1)[1])
+        if kept.get(f"{key}:{rid}") is False:
+            continue
+        out[rid] = a
     return out
 
 
