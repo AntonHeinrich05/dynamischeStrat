@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 
 from services import backtester as bt
 from services import optimizer as opt
+from services import regime_lab as rlab
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,8 @@ def _iso() -> str:
 
 
 # ---------------- Worker-Registry ----------------
-REQUIRED_WORKER_VERSION = (1, 4, 1)
-REQUIRED_WORKER_VERSION_STR = "1.4.1"
+REQUIRED_WORKER_VERSION = (1, 5, 0)
+REQUIRED_WORKER_VERSION_STR = "1.5.0"
 
 
 def _ver(v) -> tuple:
@@ -84,6 +85,17 @@ def worker_supports_dynamic() -> bool:
                 return True
         except ValueError:
             continue
+    return False
+
+
+def worker_supports_regime_lab() -> bool:
+    """Regime-Lab-Jobs braucht Worker >= 1.5.0 (ältere Worker kennen den
+    Job-Typ nicht und würden ihn ignorieren)."""
+    for w in WORKERS.values():
+        if _now() - w.get("last_seen", 0) >= WORKER_TIMEOUT:
+            continue
+        if _ver(w.get("version")) >= (1, 5):
+            return True
     return False
 
 
@@ -191,6 +203,8 @@ def _get_job(job_id: str, kind: str) -> Optional[Dict]:
         return bt.JOBS.get(job_id)
     if kind == "optimizer":
         return opt.JOBS.get(job_id)
+    if kind == "regime_lab":
+        return rlab.JOBS.get(job_id)
     return DATA_JOBS.get(job_id)
 
 
@@ -243,8 +257,15 @@ def claim(worker_id: str, want_compute: bool = True, want_data: bool = True) -> 
             meta.update({"state": "claimed", "worker_id": worker_id, "last_update": _now()})
             return {"job_id": jid, "kind": dj["kind"], "payload": dj["params"]}
     if want_compute:
+        w_ver = _ver((WORKERS.get(worker_id) or {}).get("version"))
+        skipped = []
         while COMPUTE_QUEUE:
             item = COMPUTE_QUEUE.pop(0)
+            # Regime-Lab-Jobs nur an Worker vergeben, die den Job-Typ kennen –
+            # ein alter Worker würde ihn sonst stumm liegen lassen.
+            if item["kind"] == "regime_lab" and w_ver < (1, 5):
+                skipped.append(item)
+                continue
             job = _get_job(item["job_id"], item["kind"])
             if not job or job.get("status") != "running" or job.get("cancel"):
                 if job is not None and job.get("cancel"):
@@ -256,7 +277,9 @@ def claim(worker_id: str, want_compute: bool = True, want_data: bool = True) -> 
                                          {"kind": item["kind"], "enqueued_at": _now()})
             meta.update({"state": "claimed", "worker_id": worker_id, "last_update": _now()})
             job["phase"] = "Vom lokalen Worker übernommen..."
+            COMPUTE_QUEUE[:0] = skipped
             return item
+        COMPUTE_QUEUE[:0] = skipped
     return None
 
 
@@ -368,6 +391,13 @@ async def apply_result(job_id: str, data: Dict, db):
                 await learning.record_run(db, job["result"])
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"learning record failed: {e}")
+    elif kind == "regime_lab":
+        job["result"] = data.get("result")
+        if status == "done" and db is not None:
+            try:
+                await rlab.persist_worker_result(db, job_id, job)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"local regime_lab persist failed: {e}")
     else:  # Daten-Jobs
         if data.get("summary") is not None:
             job["summary"] = data["summary"]

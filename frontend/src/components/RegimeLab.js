@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Play, Trash, ChartScatter, ArrowClockwise } from '@phosphor-icons/react';
+import { X, Play, Trash, ChartScatter, ArrowClockwise, Cloud, Desktop, Gear } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { authHeaders, isAdmin } from '../auth';
 import SafeOverlay from './SafeOverlay';
+import LocalWorkerPanel from './LocalWorkerPanel';
 import TIMEFRAMES from '../constants/timeframes';
 import EquityChart from './EquityChart';
 import RegimeChart from './RegimeChart';
@@ -26,7 +27,7 @@ const M = ({ m }) => m ? (
 ) : null;
 
 // ---------------- Regime-Karte (Label, Kennzahlen, behalten, Strategie-Suche) ----------------
-function RegimeCard({ analysis, scope, symbol, regime, usage, strategies, jobBlocked, onChanged }) {
+function RegimeCard({ analysis, scope, symbol, regime, usage, strategies, jobBlocked, execution, onChanged }) {
   const [showOpt, setShowOpt] = useState(false);
   const key = `${scopeKey(scope, symbol)}:${regime.id}`;
   const kept = (analysis.kept || {})[key] !== false;
@@ -107,14 +108,15 @@ function RegimeCard({ analysis, scope, symbol, regime, usage, strategies, jobBlo
       {showOpt && kept && (
         <RegimeOptimizePanel analysisId={analysis.id} scope={scope} symbol={symbol}
           regime={regime} strategies={strategies} analysisTf={analysis.timeframe}
-          jobBlocked={jobBlocked} onAssigned={() => { setShowOpt(false); onChanged(); }} />
+          jobBlocked={jobBlocked} execution={execution}
+          onAssigned={() => { setShowOpt(false); onChanged(); }} />
       )}
     </div>
   );
 }
 
 // ---------------- Zusammenbau + finaler Walk-Forward ----------------
-function BuildAndTest({ analysis, scope, symbol, strategies, jobBlocked, onChanged }) {
+function BuildAndTest({ analysis, scope, symbol, strategies, jobBlocked, execution, onChanged }) {
   const [name, setName] = useState('');
   const [baseStrategy, setBaseStrategy] = useState('');
   const [busy, setBusy] = useState(false);
@@ -156,7 +158,7 @@ function BuildAndTest({ analysis, scope, symbol, strategies, jobBlocked, onChang
     try {
       const r = await fetch(`${API_URL}/api/regime-lab/${analysis.id}/walkforward`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ scope, symbol, strategy_id: baseStrategy || undefined }),
+        body: JSON.stringify({ scope, symbol, strategy_id: baseStrategy || undefined, execution }),
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.detail || 'Start fehlgeschlagen'); return; }
@@ -315,10 +317,11 @@ function AnalysisDetail({ analysis, strategies, jobBlocked, onChanged }) {
       {regimes.map(r => (
         <RegimeCard key={r.id} analysis={analysis} scope={scope} symbol={symbol}
           regime={r} usage={usage?.[String(r.id)]} strategies={strategies}
-          jobBlocked={jobBlocked} onChanged={onChanged} />
+          jobBlocked={jobBlocked} execution={execution} onChanged={onChanged} />
       ))}
       <BuildAndTest analysis={analysis} scope={scope} symbol={symbol}
-        strategies={strategies} jobBlocked={jobBlocked} onChanged={onChanged} />
+        strategies={strategies} jobBlocked={jobBlocked} execution={execution}
+        onChanged={onChanged} />
     </div>
   );
 }
@@ -338,6 +341,9 @@ export default function RegimeLab({ onClose }) {
   const [confMin, setConfMin] = useState(saved.confMin ?? 70);
   const [minHold, setMinHold] = useState(saved.minHold ?? 2);
   const [trainPct, setTrainPct] = useState(saved.trainPct ?? 75);
+  const [execution, setExecution] = useState(saved.execution || 'cloud');
+  const [lwOnline, setLwOnline] = useState(false);
+  const [showLW, setShowLW] = useState(false);
   const [name, setName] = useState('');
   const [job, setJob] = useState(null);
   const [analyses, setAnalyses] = useState(null);
@@ -348,10 +354,10 @@ export default function RegimeLab({ onClose }) {
   useEffect(() => {
     try {
       localStorage.setItem(STATE_KEY, JSON.stringify({
-        selCoins, timeframe, days, scope, maxRegimes, lookback, minShare, confMin, minHold, trainPct,
+        selCoins, timeframe, days, scope, maxRegimes, lookback, minShare, confMin, minHold, trainPct, execution,
       }));
     } catch { /* quota */ }
-  }, [selCoins, timeframe, days, scope, maxRegimes, lookback, minShare, confMin, minHold, trainPct]);
+  }, [selCoins, timeframe, days, scope, maxRegimes, lookback, minShare, confMin, minHold, trainPct, execution]);
 
   const loadList = useCallback(() => {
     fetch(`${API_URL}/api/regime-lab/list`).then(r => r.json())
@@ -377,7 +383,11 @@ export default function RegimeLab({ onClose }) {
       if (d.active) attachPoll(d.active.id, d.active.kind);
     }).catch(() => {});
     loadList();
-    return () => clearInterval(pollRef.current);
+    const checkLw = () => fetch(`${API_URL}/api/localworker/status`).then(r => r.json())
+      .then(d => setLwOnline(!!d.online)).catch(() => setLwOnline(false));
+    checkLw();
+    const lwIv = setInterval(checkLw, 10000);
+    return () => { clearInterval(pollRef.current); clearInterval(lwIv); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -408,6 +418,10 @@ export default function RegimeLab({ onClose }) {
   const startAnalysis = async () => {
     if (!isAdmin()) { toast.error('Admin-Login erforderlich'); return; }
     if (!selCoins.length) { toast.error('Mindestens 1 Coin wählen'); return; }
+    if (execution === 'local' && !lwOnline) {
+      toast.error('Kein lokaler Worker verbunden – Worker starten oder Cloud wählen');
+      return;
+    }
     try {
       const r = await fetch(`${API_URL}/api/regime-lab/analyze`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -415,6 +429,7 @@ export default function RegimeLab({ onClose }) {
           symbols: selCoins, timeframe, days, scope, name: name || undefined,
           max_regimes: maxRegimes, lookback_days: lookback, min_share_pct: minShare,
           confidence_min: confMin, min_hold_days: minHold, train_pct: trainPct,
+          execution,
         }),
       });
       const d = await r.json();
@@ -453,6 +468,35 @@ export default function RegimeLab({ onClose }) {
           unsinnige verwerfen → 3) je Regime mit Discovery/Optimierer eine Strategie suchen & bestätigen →
           4) dynamische Strategie zusammenstellen und auf dem unangetasteten Holdout per Walk-Forward testen (kein Lookahead).
         </div>
+
+        <div className="opt-exec-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 10px' }}>
+          <div className="bt-exec" data-testid="regime-execution-toggle">
+            <span className="bt-exec-label">Ausführung</span>
+            <button className={`bt-exec-btn ${execution === 'cloud' ? 'on' : ''}`}
+              onClick={() => setExecution('cloud')} data-testid="regime-exec-cloud"
+              title="Berechnung auf dem Server – für kurze Zeiträume ok">
+              <Cloud size={13} weight="bold" /> Cloud
+            </button>
+            <button className={`bt-exec-btn ${execution === 'local' ? 'on' : ''}`}
+              onClick={() => setExecution('local')} data-testid="regime-exec-local"
+              title="Berechnung auf deinem PC (lokaler Worker, Multi-Core + lokale Kerzendaten) – empfohlen ab ~1000 Tagen, entlastet die Website. Worker-Version 1.5.0+ nötig.">
+              <Desktop size={13} weight="bold" /> Lokal
+              <span className={`bt-exec-dot ${lwOnline ? 'on' : ''}`} data-testid="regime-exec-dot" />
+            </button>
+            <button className="bt-exec-manage" onClick={() => setShowLW(true)}
+              title="Lokale Ausführung verwalten: Worker, Einstellungen & Marktdaten"
+              data-testid="regime-exec-manage">
+              <Gear size={13} weight="bold" />
+            </button>
+          </div>
+          {execution === 'local' && (
+            <span className="opt-small">
+              Gilt für alle Regime-Lab-Jobs (Analyse, Strategie-Suche, Walk-Forward)
+              {!lwOnline && ' · kein Worker verbunden'}
+            </span>
+          )}
+        </div>
+        {showLW && <LocalWorkerPanel onClose={() => setShowLW(false)} />}
 
         <div className="opt-row">
           <div className="opt-label">1 · NEUE REGIME-ANALYSE</div>
@@ -575,7 +619,7 @@ export default function RegimeLab({ onClose }) {
           <div className="opt-row">
             <div className="opt-label">3 · ANALYSE: {detail.name}</div>
             <AnalysisDetail analysis={detail} strategies={strategies}
-              jobBlocked={jobBlocked} onChanged={() => loadDetail(selected)} />
+              jobBlocked={jobBlocked} execution={execution} onChanged={() => loadDetail(selected)} />
           </div>
         )}
       </div>

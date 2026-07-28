@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
-WORKER_VERSION = "1.4.1"
+WORKER_VERSION = "1.5.0"
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "worker_config.json"
 
@@ -94,16 +94,18 @@ def setup_modules(cfg):
 
 
 # nach setup_modules() importiert (siehe main)
-bt = opt = cc = registry_mod = None
+bt = opt = cc = registry_mod = rlab = ropt = None
 
 
 def _import_services():
-    global bt, opt, cc, registry_mod
+    global bt, opt, cc, registry_mod, rlab, ropt
     from services import backtester as _bt
     from services import optimizer as _opt
     from services import candle_cache as _cc
+    from services import regime_lab as _rlab
+    from services import regime_opt as _ropt
     from strategies import registry as _reg
-    bt, opt, cc, registry_mod = _bt, _opt, _cc, _reg
+    bt, opt, cc, registry_mod, rlab, ropt = _bt, _opt, _cc, _reg, _rlab, _ropt
 
 
 # ---------------- Daten-Index (Inventar für die Website) ----------------
@@ -475,6 +477,60 @@ async def handle_optimizer(api, job_spec, index):
                 + (f" · Fehler: {job['error']}" if job.get("error") else ""))
 
 
+async def handle_regime_lab(api, job_spec, index):
+    """Regime-Lab-Jobs lokal rechnen: Analyse, Strategie-Suche je Regime,
+    finaler Walk-Forward. Persistiert wird serverseitig – der Worker schickt
+    das komplette Ergebnis zurück."""
+    job_id = job_spec["job_id"]
+    a = job_spec["payload"]["args"]
+    registry_mod.registry.load_custom(job_spec["payload"].get("custom_definitions") or [])
+    fn = a.get("fn")
+    body = a.get("body") or {}
+    job = _mk_job(rlab.JOBS, job_id)
+    logger.info(f"Regime-Lab {job_id}: {fn} "
+                f"(Analyse {body.get('analysis_id') or 'neu'}, "
+                f"Regime {body.get('regime_id')}) "
+                f"· {_sim_workers_effective()} Prozesse · lokal")
+    t_start = time.time()
+    relay = asyncio.create_task(_relay_progress(api, job_id, job))
+    try:
+        if fn == "analysis":
+            await _run_isolated(lambda: rlab.run_analysis(job_id, body, None))
+        elif fn == "regime_opt":
+            await _run_isolated(lambda: ropt.run_regime_optimizer(
+                job_id, body, registry_mod.registry, a["settings"], a["default_cfg"], None))
+        elif fn == "walkforward":
+            await _run_isolated(lambda: ropt.run_walkforward(
+                job_id, body, registry_mod.registry, a["settings"], a["default_cfg"], None))
+        else:
+            job["status"], job["error"] = "error", f"Unbekannter Regime-Lab-Job: {fn}"
+    except MemoryError:
+        job["status"], job["error"] = "error", (
+            "Zu wenig Arbeitsspeicher. Zeitraum verkleinern, weniger Coins wählen "
+            "oder das RAM-Limit in den Worker-Einstellungen erhöhen.")
+        logger.exception(f"Regime-Lab {job_id}: MemoryError")
+    except Exception as e:  # noqa: BLE001
+        job["status"], job["error"] = "error", f"{type(e).__name__}: {e}"[:400]
+        logger.exception(f"Regime-Lab {job_id} abgebrochen")
+    finally:
+        relay.cancel()
+    payload = {"kind": "regime_lab", "status": job["status"], "error": job["error"],
+               "result": job.get("result")}
+    await _post_result(api, job_id, payload, compress=True)
+    syms = (body.get("symbols") or
+            ((body.get("analysis_doc") or {}).get("symbols") or []))
+    for sym in syms:
+        try:
+            if await cc.persist_symbol_async(sym):
+                await asyncio.to_thread(index.update_from_cache, sym)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Speichern von {sym} fehlgeschlagen: {e}")
+    rlab.JOBS.pop(job_id, None)
+    logger.info(f"Regime-Lab {job_id} ({fn}) fertig: {job['status']} "
+                f"· {int(time.time() - t_start)}s"
+                + (f" · Fehler: {job['error']}" if job.get("error") else ""))
+
+
 async def handle_data_job(api, job_spec, index):
     import aiohttp
     job_id = job_spec["job_id"]
@@ -656,7 +712,7 @@ async def run(cfg):
                     asyncio.create_task(index.build_missing())
                     logger.info(f"Daten-Ordner geändert: {cc.CACHE_DIR}")
             for cid in resp.get("cancel_ids") or []:
-                for jobs in (bt.JOBS, opt.JOBS):
+                for jobs in (bt.JOBS, opt.JOBS, rlab.JOBS):
                     if cid in jobs:
                         jobs[cid]["cancel"] = True
             job = resp.get("job")
@@ -667,6 +723,8 @@ async def run(cfg):
                     active[job["job_id"]] = asyncio.create_task(handle_backtest(api, job, index))
                 elif kind == "optimizer":
                     active[job["job_id"]] = asyncio.create_task(handle_optimizer(api, job, index))
+                elif kind == "regime_lab":
+                    active[job["job_id"]] = asyncio.create_task(handle_regime_lab(api, job, index))
                 elif kind and kind.startswith("data_"):
                     active_data[job["job_id"]] = asyncio.create_task(handle_data_job(api, job, index))
             if api.bad_responses >= 3:

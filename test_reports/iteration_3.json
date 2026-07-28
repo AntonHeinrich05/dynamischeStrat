@@ -1,0 +1,52 @@
+{
+  "summary": "Public-URL regression and UI testing completed for Regime-Lab Local Worker support. Backend focused suite passed 3/3: cloud analysis without execution completed, persisted, appeared in list and was deleted; local dispatch returned an allowed non-500 response; required worker version and smoke APIs passed. Execution toggle/manage/persistence UI and Optimizer modal passed, but opening seeded Test-Analyse crashes the React view.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "RegimeLab AnalysisDetail",
+        "issue": "Opening Test-Analyse (ra_c8206904) crashes the entire React view and shows the ErrorBoundary instead of charts/regime cards: ReferenceError: execution is not defined.",
+        "selector": "[data-testid='regime-analysis-row-ra_c8206904']",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Open persisted Regime-Lab analysis",
+        "issue": "AnalysisDetail cannot pass the selected cloud/local execution mode to RegimeCard and BuildAndTest because execution is referenced but not declared in the component props.",
+        "affected_selectors": [
+          "[data-testid='regime-analysis-row-ra_c8206904']",
+          "[data-testid='regime-analysis-detail']"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regime_worker_regression.py",
+    "/app/test_reports/pytest/regime_worker_regression_results.xml"
+  ],
+  "action_items": [
+    "Pass execution into AnalysisDetail and add it to the AnalysisDetail parameter destructuring, then retest Test-Analyse detail charts/cards and execution propagation into optimizer/walk-forward actions."
+  ],
+  "critical_code_review_comments": [
+    "RegimeLab.js calls <AnalysisDetail ... execution={execution}> nowhere: the parent invocation omits execution, while AnalysisDetail references execution on lines 320 and 323. This deterministic ReferenceError makes every analysis detail unusable.",
+    "RegimeLab.js is 629 lines and owns modal setup, polling, analysis detail, cards, optimizer integration, and walk-forward/build flows; split it into focused components to reduce prop-contract errors like this one."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_regime_worker_regression.py",
+    "/app/test_reports/iteration_3.json"
+  ],
+  "success_rate": {
+    "backend": "100% (3/3 focused tests)",
+    "frontend": "83% (5/6 requested UI checks; analysis detail failed)"
+  },
+  "seed_data_creation": "Created one temporary QA-Cloud-Regression analysis (BTCUSDT, 15m, 30d, combined) and deleted it after persistence/list verification. Local-dispatch test did not leave a running job. No foreign analyses or dynamic strategies were deleted.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend cloud/local regression is green. UI verified header Regime-Lab entry, execution controls/dot/manage gear, LocalWorkerPanel, localStorage persistence after modal reopen, and global Optimizer modal. Retest must focus on ra_c8206904 detail after fixing AnalysisDetail execution prop, then assert .rl-chart and regime-card elements render. Build compiles despite the runtime ReferenceError.",
+  "rca_of_the_issue": "RegimeLab owns execution state, but the selected/detail render invokes AnalysisDetail with analysis, strategies, jobBlocked and onChanged only. AnalysisDetail's signature likewise omits execution, yet its render passes execution to each RegimeCard and BuildAndTest. JavaScript therefore resolves an undeclared identifier and throws as soon as any saved analysis detail renders. Reproduction: open Regime-Lab, click Test-Analyse; ErrorBoundary appears and browser console reports ReferenceError at AnalysisDetail."
+}

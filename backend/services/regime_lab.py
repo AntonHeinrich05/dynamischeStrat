@@ -226,14 +226,14 @@ async def run_analysis(job_id: str, body: Dict, db):
                "combined": combined, "per_coin": per_coin,
                "kept": {}, "assignments": {}, "walkforward": {},
                "created_at": datetime.now(timezone.utc).isoformat()}
-        await db.regime_analyses.replace_one({"id": aid}, doc, upsert=True)
-        n = await db.regime_analyses.count_documents({})
-        if n > MAX_ANALYSES:
-            old = await db.regime_analyses.find().sort("created_at", 1) \
-                .limit(n - MAX_ANALYSES).to_list(n)
-            for o in old:
-                await db.regime_analyses.delete_one({"id": o["id"]})
-        job["result"] = {"analysis_id": aid}
+        result = {"kind": "analysis", "analysis_id": aid}
+        if db is not None:
+            await persist_analysis(db, doc)
+        else:
+            # Lokaler Worker: kein DB-Zugriff – Dokument mit dem Ergebnis
+            # zurückschicken, der Server persistiert es (persist_worker_result).
+            result["analysis_doc"] = doc
+        job["result"] = result
         job["status"] = "done"
         job["progress"] = 100
         job["phase"] = "Fertig"
@@ -245,6 +245,36 @@ async def run_analysis(job_id: str, body: Dict, db):
         job["status"] = "error"
         job["error"] = str(e)[:300]
         job["phase"] = "Fehler"
+
+
+# ---------------- Persistierung (auch für lokal berechnete Jobs) ----------------
+async def persist_analysis(db, doc: Dict):
+    await db.regime_analyses.replace_one({"id": doc["id"]}, doc, upsert=True)
+    n = await db.regime_analyses.count_documents({})
+    if n > MAX_ANALYSES:
+        old = await db.regime_analyses.find().sort("created_at", 1) \
+            .limit(n - MAX_ANALYSES).to_list(n)
+        for o in old:
+            await db.regime_analyses.delete_one({"id": o["id"]})
+
+
+async def persist_worker_result(db, job_id: str, job: Dict):
+    """Ergebnis eines auf dem lokalen Worker berechneten Regime-Lab-Jobs
+    serverseitig speichern (der Worker hat keinen Datenbank-Zugriff)."""
+    res = job.get("result") or {}
+    kind = res.get("kind")
+    if kind == "analysis" and res.get("analysis_doc"):
+        await persist_analysis(db, res.pop("analysis_doc"))
+    elif kind == "regime_opt":
+        await db.regime_lab_runs.replace_one(
+            {"id": job_id}, {"id": job_id, "result": res,
+                             "created_at": res.get("created_at")}, upsert=True)
+    elif kind == "walkforward":
+        key = scope_key(res.get("scope") or "combined", res.get("symbol"))
+        await db.regime_analyses.update_one(
+            {"id": res.get("analysis_id")},
+            {"$set": {f"walkforward.{key}":
+                      {k: v for k, v in res.items() if k != "points"}}})
 
 
 # ---------------- Wiederverwendung gespeicherter Analysen ----------------

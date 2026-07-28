@@ -27,6 +27,50 @@ def _stop_fn(job):
     return stop
 
 
+async def _load_doc(body: Dict, db) -> Dict:
+    """Analyse-Dokument beschaffen: auf dem Server aus Mongo, auf dem lokalen
+    Worker aus dem mitgeschickten Payload (Worker hat keinen DB-Zugriff)."""
+    doc = body.get("analysis_doc")
+    if doc is None and db is not None:
+        doc = await db.regime_analyses.find_one({"id": body.get("analysis_id")})
+    if not doc:
+        raise RuntimeError("Regime-Analyse nicht gefunden")
+    return doc
+
+
+def _make_seg_pool(*segment_maps):
+    """Multi-Core (nur mit SIM_WORKERS>1, d.h. lokaler Worker): Regime-Abschnitte
+    auf alle Kerne verteilen – gleicher Mechanismus wie der Dynamik-Modus.
+    In der Cloud bleibt alles sequenziell (SIM_WORKERS=1)."""
+    try:
+        from services import parallel_sim
+        n_workers = parallel_sim.workers_configured()
+        if n_workers <= 1:
+            return None
+        seg_data = dyn.register_segments(*[s for s in segment_maps if s])
+        if not seg_data:
+            return None
+        pool = parallel_sim.make_pool(seg_data, n_workers)
+        dyn.set_pool(pool)
+        logger.info(f"Regime-Lab Multi-Core: {len(seg_data)} Abschnitte auf "
+                    f"{n_workers} Kerne verteilt")
+        return pool
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Regime-Lab Multi-Core deaktiviert: {e}")
+        dyn.set_pool(None)
+        return None
+
+
+def _close_seg_pool(pool, cancelled: bool):
+    dyn.set_pool(None)
+    if pool is not None:
+        try:
+            from services import parallel_sim
+            parallel_sim.close_pool(pool, kill=cancelled)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _guarded(m: Dict, objective: str, min_trades: int) -> float:
     from services.dynamic_strategy import _guarded_score
     return _guarded_score(m, objective, min_trades)
@@ -57,8 +101,9 @@ async def run_regime_optimizer(job_id: str, body: Dict, registry, settings: Dict
     from services.optimizer import build_trade_space, _mk_strategy
     job = lab.JOBS[job_id]
     stop = _stop_fn(job)
+    seg_pool = None
     try:
-        doc = await db.regime_analyses.find_one({"id": body.get("analysis_id")})
+        doc = await _load_doc(body, db)
         if not doc:
             raise RuntimeError("Regime-Analyse nicht gefunden")
         scope = body.get("scope") or "combined"
@@ -99,6 +144,7 @@ async def run_regime_optimizer(job_id: str, body: Dict, registry, settings: Dict
                                 else dyn.split_segments(segments, regime_train_pct))
         if not train_segs:
             train_segs, val_segs = segments, None
+        seg_pool = _make_seg_pool(train_segs, val_segs)
 
         base_definition = None
         strategy = None
@@ -228,9 +274,10 @@ async def run_regime_optimizer(job_id: str, body: Dict, registry, settings: Dict
             "max_capital": cfg.get("max_capital"),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.regime_lab_runs.replace_one(
-            {"id": job_id}, {"id": job_id, "result": result,
-                             "created_at": result["created_at"]}, upsert=True)
+        if db is not None:
+            await db.regime_lab_runs.replace_one(
+                {"id": job_id}, {"id": job_id, "result": result,
+                                 "created_at": result["created_at"]}, upsert=True)
         job["result"] = result
         job["status"] = "done"
         job["progress"] = 100
@@ -243,6 +290,8 @@ async def run_regime_optimizer(job_id: str, body: Dict, registry, settings: Dict
         job["status"] = "error"
         job["error"] = str(e)[:300]
         job["phase"] = "Fehler"
+    finally:
+        _close_seg_pool(seg_pool, cancelled=stop())
 
 
 # ---------------- Finaler Walk-Forward der zusammengestellten Strategie ----------------
@@ -270,10 +319,9 @@ async def run_walkforward(job_id: str, body: Dict, registry, settings: Dict,
     from services.optimizer import _mk_strategy
     job = lab.JOBS[job_id]
     stop = _stop_fn(job)
+    seg_pool = None
     try:
-        doc = await db.regime_analyses.find_one({"id": body.get("analysis_id")})
-        if not doc:
-            raise RuntimeError("Regime-Analyse nicht gefunden")
+        doc = await _load_doc(body, db)
         scope = body.get("scope") or "combined"
         symbol = body.get("symbol")
         model = lab.model_for(doc, scope, symbol)
@@ -315,6 +363,22 @@ async def run_walkforward(job_id: str, body: Dict, registry, settings: Dict,
                                "neue Analyse mit z.B. 75% Training erstellen")
         test_segs = dyn.build_segments(histories, test_labels)
 
+        # Benchmark-Segmente: kompletter Holdout als EIN statischer Abschnitt
+        stat_segs = {}
+        for sym, candles in histories.items():
+            train_end = (doc.get("bounds") or {}).get(sym, {}).get("train_end_ts")
+            if not train_end:
+                continue
+            ts = [c["timestamp"] for c in candles]
+            import bisect as _b
+            si = _b.bisect_right(ts, train_end)
+            if si >= len(candles) - 20:
+                continue
+            w0 = max(si - dyn.WARMUP_BARS, 0)
+            stat_segs[sym] = [{"regime": -1, "start_ts": candles[si]["timestamp"],
+                               "candles": candles[w0:], "n_bars": len(candles) - si}]
+        seg_pool = _make_seg_pool(test_segs, stat_segs)
+
         configs = {rid: (a.get("trade_params") or {}) for rid, a in assignments.items()}
         strategies_by_regime = {}
         for rid, a in assignments.items():
@@ -333,19 +397,6 @@ async def run_walkforward(job_id: str, body: Dict, registry, settings: Dict,
 
         # Benchmark: jede bestätigte Regime-Strategie EINZELN statisch auf dem
         # kompletten Holdout – schlägt die Kombination die beste Einzelne?
-        stat_segs = {}
-        for sym, candles in histories.items():
-            train_end = (doc.get("bounds") or {}).get(sym, {}).get("train_end_ts")
-            if not train_end:
-                continue
-            ts = [c["timestamp"] for c in candles]
-            import bisect as _b
-            si = _b.bisect_right(ts, train_end)
-            if si >= len(candles) - 20:
-                continue
-            w0 = max(si - dyn.WARMUP_BARS, 0)
-            stat_segs[sym] = [{"regime": -1, "start_ts": candles[si]["timestamp"],
-                               "candles": candles[w0:], "n_bars": len(candles) - si}]
         singles = []
         for i, (rid, a) in enumerate(sorted(assignments.items())):
             if stop():
@@ -395,10 +446,11 @@ async def run_walkforward(job_id: str, body: Dict, registry, settings: Dict,
                   "points": points[:8000],
                   "created_at": datetime.now(timezone.utc).isoformat()}
         key = lab.scope_key(scope, symbol)
-        await db.regime_analyses.update_one(
-            {"id": doc["id"]},
-            {"$set": {f"walkforward.{key}":
-                      {k: v for k, v in result.items() if k != "points"}}})
+        if db is not None:
+            await db.regime_analyses.update_one(
+                {"id": doc["id"]},
+                {"$set": {f"walkforward.{key}":
+                          {k: v for k, v in result.items() if k != "points"}}})
         job["result"] = result
         job["status"] = "done"
         job["progress"] = 100
@@ -411,3 +463,5 @@ async def run_walkforward(job_id: str, body: Dict, registry, settings: Dict,
         job["status"] = "error"
         job["error"] = str(e)[:300]
         job["phase"] = "Fehler"
+    finally:
+        _close_seg_pool(seg_pool, cancelled=stop())

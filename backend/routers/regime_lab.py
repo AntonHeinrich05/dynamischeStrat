@@ -44,21 +44,60 @@ async def _get_doc(aid: str) -> Dict:
     return doc
 
 
+def _slim_doc(doc: Dict) -> Dict:
+    """Analyse-Dokument für den Worker-Payload: ohne Chart-Daten (unnötig groß)."""
+    return {k: v for k, v in _clean(doc).items() if k != "chart"}
+
+
+def _enqueue_local(kind_fn: str, job_id: str, body: Dict):
+    from services import local_exec
+    local_exec.enqueue_compute("regime_lab", job_id, {
+        "kind": "regime_lab",
+        "args": {"fn": kind_fn, "body": body,
+                 "settings": dict(scanner.settings),
+                 "default_cfg": dict(DEFAULT_COIN_CFG)},
+        "custom_definitions": strategy_registry.list_custom_definitions(),
+    })
+
+
+def _check_local_available():
+    from services import local_exec
+    if not local_exec.worker_online():
+        raise HTTPException(status_code=503,
+                            detail="Kein lokaler Worker verbunden – Worker starten "
+                                   "oder Cloud-Ausführung wählen")
+    if not local_exec.worker_supports_regime_lab():
+        raise HTTPException(status_code=409,
+                            detail="Der verbundene lokale Worker ist veraltet und kennt "
+                                   "Regime-Lab-Jobs noch nicht. Bitte das Worker-Paket neu "
+                                   "herunterladen (Ausführung → Lokal → ⚙ Verwalten → "
+                                   "Download) und den Worker neu starten – oder "
+                                   "Cloud-Ausführung wählen.")
+
+
 @router.post("/api/regime-lab/analyze")
 async def start_analysis(body: Dict, _: bool = Depends(require_admin)):
     """Regime-Analyse starten: Regime für Coins/Timeframe/Zeitraum suchen und
-    speichern – kombiniert über alle Coins und je Coin einzeln."""
+    speichern – kombiniert über alle Coins und je Coin einzeln.
+    execution=local rechnet auf dem lokalen Worker (empfohlen ab ~1000 Tagen)."""
     symbols = [s for s in (body.get("symbols") or []) if isinstance(s, str)]
     if not symbols:
         raise HTTPException(status_code=400, detail="Mindestens 1 Coin erforderlich")
     if (body.get("scope") or "both") not in ("both", "combined", "per_coin"):
         raise HTTPException(status_code=400, detail="scope muss both|combined|per_coin sein")
     _guard_no_running()
-    job_id = lab.create_job("analysis", {k: body.get(k) for k in
-                                         ("symbols", "timeframe", "days", "scope",
-                                          "max_regimes", "lookback_days",
-                                          "min_share_pct", "confidence_min",
-                                          "min_hold_days", "train_pct", "name")})
+    execution = (body.get("execution") or "cloud").lower()
+    params = {k: body.get(k) for k in
+              ("symbols", "timeframe", "days", "scope", "max_regimes",
+               "lookback_days", "min_share_pct", "confidence_min",
+               "min_hold_days", "train_pct", "name")}
+    params["execution"] = execution
+    if execution == "local":
+        _check_local_available()
+        job_id = lab.create_job("analysis", params)
+        _enqueue_local("analysis", job_id, body)
+        return {"status": "started", "job_id": job_id, "execution": "local"}
+    job_id = lab.create_job("analysis", params)
     task = asyncio.create_task(lab.run_analysis(job_id, body, state.db))
     _watch_job_task(task, lab.JOBS, job_id)
     return {"status": "started", "job_id": job_id}
@@ -175,11 +214,18 @@ async def start_regime_optimize(aid: str, body: Dict, _: bool = Depends(require_
         raise HTTPException(status_code=400, detail="Gültige strategy_id erforderlich")
     _guard_no_running()
     body["analysis_id"] = aid
-    job_id = lab.create_job("regime_opt", {k: body.get(k) for k in
-                                           ("analysis_id", "scope", "symbol",
-                                            "regime_id", "mode", "strategy_id",
-                                            "timeframe", "objective", "iterations",
-                                            "min_trades", "max_rules")})
+    execution = (body.get("execution") or "cloud").lower()
+    params = {k: body.get(k) for k in
+              ("analysis_id", "scope", "symbol", "regime_id", "mode",
+               "strategy_id", "timeframe", "objective", "iterations",
+               "min_trades", "max_rules")}
+    params["execution"] = execution
+    if execution == "local":
+        _check_local_available()
+        job_id = lab.create_job("regime_opt", params)
+        _enqueue_local("regime_opt", job_id, {**body, "analysis_doc": _slim_doc(doc)})
+        return {"status": "started", "job_id": job_id, "execution": "local"}
+    job_id = lab.create_job("regime_opt", params)
     task = asyncio.create_task(regime_opt.run_regime_optimizer(
         job_id, body, strategy_registry, scanner.settings, DEFAULT_COIN_CFG, state.db))
     _watch_job_task(task, lab.JOBS, job_id)
@@ -291,12 +337,19 @@ async def build_dynamic(aid: str, body: Dict, _: bool = Depends(require_admin)):
 async def start_walkforward(aid: str, body: Dict, _: bool = Depends(require_admin)):
     """Finaler Walk-Forward: die zusammengestellte dynamische Strategie auf dem
     unangetasteten Holdout testen (kein Lookahead – identisch zum Live-Verhalten)."""
-    await _get_doc(aid)
+    doc = await _get_doc(aid)
     _guard_no_running()
     body["analysis_id"] = aid
-    job_id = lab.create_job("walkforward", {k: body.get(k) for k in
-                                            ("analysis_id", "scope", "symbol",
-                                             "strategy_id")})
+    execution = (body.get("execution") or "cloud").lower()
+    params = {k: body.get(k) for k in
+              ("analysis_id", "scope", "symbol", "strategy_id")}
+    params["execution"] = execution
+    if execution == "local":
+        _check_local_available()
+        job_id = lab.create_job("walkforward", params)
+        _enqueue_local("walkforward", job_id, {**body, "analysis_doc": _slim_doc(doc)})
+        return {"status": "started", "job_id": job_id, "execution": "local"}
+    job_id = lab.create_job("walkforward", params)
     task = asyncio.create_task(regime_opt.run_walkforward(
         job_id, body, strategy_registry, scanner.settings, DEFAULT_COIN_CFG, state.db))
     _watch_job_task(task, lab.JOBS, job_id)

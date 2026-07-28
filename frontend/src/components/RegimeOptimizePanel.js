@@ -52,7 +52,7 @@ const Metrics = ({ m }) => m ? (
  * zählt nur der Kerzen-Anteil dieser Marktphase.
  */
 export default function RegimeOptimizePanel({ analysisId, scope, symbol, regime,
-  strategies, analysisTf, onAssigned, jobBlocked }) {
+  strategies, analysisTf, onAssigned, jobBlocked, execution }) {
   const [mode, setMode] = useState('combo');
   const [strategyId, setStrategyId] = useState('');
   const [baseStrategy, setBaseStrategy] = useState('');
@@ -89,6 +89,7 @@ export default function RegimeOptimizePanel({ analysisId, scope, symbol, regime,
           iterations, objective, min_trades: minTrades, max_rules: maxRules,
           optimize: optFlags, timeframe: tf,
           regime_walk_forward: regimeWf, regime_train_pct: regimeTrainPct,
+          execution,
         }),
       });
       const d = await r.json();
