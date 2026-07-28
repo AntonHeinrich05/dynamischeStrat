@@ -18,6 +18,7 @@ import logging
 import os
 import pickle
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -154,19 +155,28 @@ async def _fetch_range(session, symbol: str, start_ms: int, end_ms: int,
             raise JobCancelled()
         params = {"symbol": symbol, "interval": "1m", "startTime": cur, "limit": 1000}
         data = None
-        for attempt in range(4):
+        for attempt in range(5):
             try:
                 async with session.get(BINANCE_URL, params=params,
                                        timeout=aiohttp.ClientTimeout(total=30)) as r:
                     data = await r.json(content_type=None)
                 if isinstance(data, list):
                     break
+                data = None
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"candle_cache fetch {symbol} attempt {attempt + 1} failed: {e}")
                 data = None
-            await asyncio.sleep(1.0 + attempt)
-        if not isinstance(data, list) or not data:
-            break
+            await asyncio.sleep(1.5 * (attempt + 1))
+        if data is None:
+            # Netzwerk-/API-Fehler: NICHT stillschweigend abbrechen, sonst
+            # entsteht eine Lücke in der Historie, die später nie mehr
+            # nachgeladen wird (die Lücke gilt dann als "im Cache").
+            raise RuntimeError(
+                f"Download von {symbol} bei {datetime.fromtimestamp(cur / 1000, timezone.utc):%d.%m.%Y} "
+                f"abgebrochen (Netzwerk/API nicht erreichbar). Bereits geladene "
+                f"Etappen sind gespeichert – Download einfach erneut starten.")
+        if not data:
+            break  # keine weiteren Kerzen verfügbar (vor Listing-Datum / aktuell)
         blocks.append(np.array([[k[0], k[1], k[2], k[3], k[4], k[5]] for k in data],
                                dtype=np.float64))
         total += len(data)
@@ -192,7 +202,7 @@ async def _fetch_range_parallel(session, symbol: str, start_ms: int, end_ms: int
     span = end_ms - start_ms
     days = span / 86400000.0
     if workers <= 0:
-        workers = int(min(6, max(3, days // 250)))
+        workers = int(min(4, max(2, days // 400)))
     if span <= 2 * 86400 * 1000 or workers <= 1:
         return await _fetch_range(session, symbol, start_ms, end_ms, job=job)
     pace = 0.05 * workers  # ~ konstant 10-12 Requests/s insgesamt

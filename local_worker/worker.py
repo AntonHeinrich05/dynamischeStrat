@@ -23,8 +23,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict
 
-WORKER_VERSION = "1.4.0"
+WORKER_VERSION = "1.4.1"
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "worker_config.json"
 
@@ -231,9 +232,65 @@ def _sim_workers_effective():
 
 # ---------------- HTTP-Helfer ----------------
 class Api:
-    def __init__(self, session, server):
+    """Steuerkanal zum Server.
+
+    Wichtig: Antworten werden IMMER defensiv ausgewertet. Proxys/Ingress liefern
+    unter Last gelegentlich beschädigte Antworten (z.B. Chunk-Reste vor dem JSON).
+    Vorher ist der Worker daran mit `json.decoder.JSONDecodeError` gestorben –
+    dann kam kein Heartbeat mehr an und laufende Jobs hingen in der Website fest.
+    """
+
+    def __init__(self, session, server, token=None):
         self.session = session
         self.server = server
+        self.token = token
+        self.bad_responses = 0
+
+    @staticmethod
+    def make_session(token):
+        import aiohttp
+        # force_close: kein Keep-Alive. Der Steuerkanal sendet nur kleine
+        # Nachrichten (alle 2 s) – dafür ist eine frische Verbindung billig und
+        # eine desynchronisierte Verbindung damit ausgeschlossen.
+        connector = aiohttp.TCPConnector(limit=8, force_close=True,
+                                        ttl_dns_cache=600, enable_cleanup_closed=True)
+        return aiohttp.ClientSession(headers={"X-Worker-Token": token},
+                                     connector=connector)
+
+    async def reset(self):
+        """Session neu aufbauen (nach beschädigten Antworten / Netzproblemen)."""
+        try:
+            await self.session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.session = self.make_session(self.token)
+        self.bad_responses = 0
+        logger.info("Server-Verbindung neu aufgebaut")
+
+    def _parse(self, raw: bytes, path: str) -> Dict:
+        if not raw:
+            return {}
+        txt = raw.decode("utf-8", "replace")
+        try:
+            data = json.loads(txt)
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            pass
+        # Beschädigte Antwort: erstes vollständiges JSON-Objekt herausschneiden
+        i = txt.find("{")
+        if i >= 0:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(txt[i:])
+                if isinstance(obj, dict):
+                    self.bad_responses += 1
+                    logger.warning(f"Beschädigte Antwort von {path} – "
+                                   f"Nutzdaten gerettet, Rest verworfen")
+                    return obj
+            except ValueError:
+                pass
+        self.bad_responses += 1
+        logger.warning(f"Ungültige Antwort von {path}: {txt[:120]!r}")
+        return {}
 
     async def post(self, path, payload, compress=False):
         import aiohttp
@@ -243,10 +300,14 @@ class Api:
             headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
             async with self.session.post(url, data=data, headers=headers,
                                          timeout=aiohttp.ClientTimeout(total=300)) as r:
-                return r.status, await r.json(content_type=None)
-        async with self.session.post(url, json=payload,
-                                     timeout=aiohttp.ClientTimeout(total=60)) as r:
-            return r.status, await r.json(content_type=None)
+                raw, status = await r.read(), r.status
+        else:
+            async with self.session.post(url, json=payload,
+                                         timeout=aiohttp.ClientTimeout(total=60)) as r:
+                raw, status = await r.read(), r.status
+        if status < 400:
+            self.bad_responses = max(self.bad_responses - 1, 0)
+        return status, self._parse(raw, path)
 
 
 # ---------------- Job-Ausführung (identischer Code wie der Server) ----------------
@@ -453,7 +514,14 @@ async def handle_data_job(api, job_spec, index):
                 raise RuntimeError("Keine Daten vorhanden" if kind == "data_update"
                                    else "Keine Coins angegeben")
             headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-            async with aiohttp.ClientSession(headers=headers) as data_session:
+            # Eigene Verbindung mit DNS-Cache und begrenzter Anzahl Sockets –
+            # bei zehntausenden Requests laufen sonst DNS/NAT-Tabellen über
+            # ("getaddrinfo failed").
+            connector = aiohttp.TCPConnector(limit=8, limit_per_host=6,
+                                             ttl_dns_cache=600,
+                                             enable_cleanup_closed=True)
+            async with aiohttp.ClientSession(headers=headers,
+                                             connector=connector) as data_session:
                 for i, sym in enumerate(symbols):
                     if local["cancel"]:
                         status = "cancelled"
@@ -489,12 +557,15 @@ async def handle_data_job(api, job_spec, index):
     except Exception as e:
         status = "error"
         errors.append(str(e))
+    if errors and not done_syms and status == "done":
+        status = "error"
     payload = {"kind": kind, "status": status,
-               "error": "; ".join(errors)[:300] if (errors and status != "done") else None,
+               "error": "; ".join(errors)[:400] if errors else None,
                "summary": {"symbols": done_syms, "errors": errors,
-                           "data": index.summary()}}
+                           "data": index.summary(max_age=0)}}
     await _post_result(api, job_id, payload)
-    logger.info(f"Daten-Job {job_id} ({kind}) fertig: {status} {done_syms}")
+    logger.info(f"Daten-Job {job_id} ({kind}) fertig: {status} {done_syms}"
+                + (f" · Fehler: {'; '.join(errors)[:200]}" if errors else ""))
 
 
 # ---------------- Auto-Update der lokalen Daten ----------------
@@ -536,10 +607,11 @@ async def run(cfg):
 
     asyncio.create_task(auto_update_loop(lambda: server_settings, busy, index))
 
-    session = aiohttp.ClientSession(headers={"X-Worker-Token": cfg["token"]})
-    api = Api(session, cfg["server"])
+    session = Api.make_session(cfg["token"])
+    api = Api(session, cfg["server"], cfg["token"])
     logger.info(f"Worker '{cfg['name']}' verbindet zu {cfg['server']} · Daten: {cc.CACHE_DIR}")
     first = True
+    fails = 0
     while True:
         try:
             for d in (active, active_data):
@@ -597,13 +669,25 @@ async def run(cfg):
                     active[job["job_id"]] = asyncio.create_task(handle_optimizer(api, job, index))
                 elif kind and kind.startswith("data_"):
                     active_data[job["job_id"]] = asyncio.create_task(handle_data_job(api, job, index))
+            if api.bad_responses >= 3:
+                await api.reset()
+            fails = 0
             await asyncio.sleep(2)
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-            logger.warning(f"Verbindung zum Server fehlgeschlagen ({e}) – neuer Versuch in 5s")
+            fails += 1
+            logger.warning(f"Verbindung zum Server fehlgeschlagen ({e}) – "
+                           f"neuer Versuch in 5s")
             first = True
+            if fails >= 3:
+                await api.reset()
+                fails = 0
             await asyncio.sleep(5)
         except Exception:
+            fails += 1
             logger.exception("Unerwarteter Fehler in der Hauptschleife")
+            if fails >= 3:
+                await api.reset()
+                fails = 0
             await asyncio.sleep(5)
 
 

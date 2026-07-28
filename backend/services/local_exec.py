@@ -57,8 +57,8 @@ def _iso() -> str:
 
 
 # ---------------- Worker-Registry ----------------
-REQUIRED_WORKER_VERSION = (1, 4, 0)
-REQUIRED_WORKER_VERSION_STR = "1.4.0"
+REQUIRED_WORKER_VERSION = (1, 4, 1)
+REQUIRED_WORKER_VERSION_STR = "1.4.1"
 
 
 def _ver(v) -> tuple:
