@@ -140,7 +140,70 @@ def evaluate_task(spec: Dict, symbols: List[str], settings: Dict, cfg: Dict) -> 
     return _evaluate(strat, hist, settings, cfg, fs, None)
 
 
+def static_metrics_task(spec: Dict, keys: List[str], symbols: List[str],
+                        settings: Dict, cfg: Dict, capital: float) -> Dict:
+    """Statische Benchmark-Konfiguration über die gesamten Trainingsdaten
+    bewerten (dynamischer Modus). Gibt nur Metriken zurück – die Trade-Listen
+    bleiben im Kind-Prozess, damit nichts Großes übertragen wird."""
+    from services import fast_sim
+    from services.backtester import simulate_pair
+    from services.dynamic_strategy import metrics_from_rows
+    strat = _strategy_from_spec(spec)
+    rows = []
+    for key, sym in zip(keys, symbols):
+        provider = None
+        try:
+            if getattr(strat, "IS_CUSTOM", False):
+                provider = fast_sim.build_signal_provider(strat.definition, _fast(key))
+            else:
+                provider = fast_sim.build_builtin_signal_provider(
+                    strat, _fast(key), settings, sym)
+        except Exception:  # noqa: BLE001
+            provider = None
+        res = simulate_pair(strat, _DATA[key], sym, settings, cfg, None, True,
+                            None, provider)
+        rows.extend(res.get("all_trades") or [])
+    return metrics_from_rows(rows, capital)
+
+
+def sim_segment_task(spec: Dict, key: str, symbol: str, settings: Dict, cfg: Dict,
+                     start_iso: str, use_fast: bool = True) -> List[Dict]:
+    """Einen Regime-Abschnitt simulieren (dynamischer Modus). Es werden nur Trades
+    zurückgegeben, die IM Abschnitt geöffnet wurden (Warmup verworfen) – identisch
+    zu dynamic_strategy.simulate_segment, nur im Kind-Prozess."""
+    from services import fast_sim
+    from services.backtester import simulate_pair
+    try:
+        strat = _strategy_from_spec(spec)
+        candles = _DATA[key]
+        provider = None
+        if use_fast:
+            try:
+                if getattr(strat, "IS_CUSTOM", False):
+                    provider = fast_sim.build_signal_provider(strat.definition, _fast(key))
+                else:
+                    provider = fast_sim.build_builtin_signal_provider(
+                        strat, _fast(key), settings, symbol)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"fast_sim fallback (segment) {key}: {e}")
+                provider = None
+        res = simulate_pair(strat, candles, symbol, settings, cfg, None, True,
+                            None, provider)
+        return [t for t in (res.get("all_trades") or [])
+                if (t.get("opened") or "") >= start_iso]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"sim_segment_task {key}: {e}")
+        return []
+
+
 # ---- Timed-Varianten für die Benchmark-Statistik (gleiche Logik + Dauer) ----
+def sim_segment_task_timed(*args):
+    import time
+    t0 = time.perf_counter()
+    rows = sim_segment_task(*args)
+    return rows, time.perf_counter() - t0
+
+
 def sim_pair_task_timed(*args):
     import time
     t0 = time.perf_counter()

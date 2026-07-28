@@ -801,6 +801,75 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     test_labels = {s: labels_full[s][split_idx[s]:] for s in labels_full}
     train_segs = dyn.build_segments(full_histories, train_labels)
     test_segs = dyn.build_segments(full_histories, test_labels, offset_map=split_idx)
+    full_segs = dyn.build_segments(full_histories, labels_full)
+    stat_test_segs = {}
+    for s in full_histories:
+        si = split_idx[s]
+        if si < len(full_histories[s]):
+            stat_test_segs[s] = [{"regime": -1,
+                                  "start_ts": full_histories[s][si]["timestamp"],
+                                  "candles": full_histories[s][max(si - dyn.WARMUP_BARS, 0):],
+                                  "n_bars": len(full_histories[s]) - si}]
+
+    # Walk-Forward INNERHALB jeder Marktphase: die Trainingsabschnitte werden
+    # nochmals geteilt. Eine Sub-Strategie/Konfiguration wird nur übernommen,
+    # wenn sie auf dem unbekannten Teil DERSELBEN Phase profitabel bleibt.
+    regime_wf = dcfg.get("regime_walk_forward", True)
+    inner_train, inner_val = (dyn.split_segments(train_segs, dcfg.get("regime_train_pct", 75))
+                              if regime_wf else (train_segs, None))
+
+    # Multi-Core: alle Regime-Abschnitte einmalig an die Kind-Prozesse geben.
+    # Ohne das lief der komplette Dynamik-Modus auf einem einzigen Kern.
+    seg_data = dyn.register_segments(train_segs, test_segs, full_segs,
+                                     stat_test_segs, inner_train, inner_val)
+    static_keys = {}
+    for s, c in train_hist.items():
+        static_keys[s] = f"statictrain#{s}"
+        seg_data[static_keys[s]] = c
+    seg_pool = None
+    dyn.reset_bench()
+    try:
+        from services import parallel_sim
+        n_workers = parallel_sim.workers_configured()
+        if n_workers > 1:
+            seg_pool = parallel_sim.make_pool(seg_data, n_workers)
+            dyn.set_pool(seg_pool)
+            logger.info(f"Dynamik-Modus: {len(seg_data)} Abschnitte auf "
+                        f"{n_workers} Kerne verteilt")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Dynamik-Modus Multi-Core deaktiviert: {e}")
+        seg_pool = None
+        dyn.set_pool(None)
+    try:
+        return await _run_dynamic_inner(
+            job, dcfg, strategy, sid, settings, cfg, tf, days, objective, min_trades,
+            iterations, trade_space, should_stop, db, model, train_hist, full_histories,
+            labels_full, split_idx, train_segs, test_segs, full_segs, stat_test_segs,
+            inner_train, inner_val, static_keys, max_regimes, lookback_days, conf_min,
+            min_hold_days, min_share, train_pct, rule_variants, per_regime_strategies,
+            max_rules_regime, variant_indicators)
+    finally:
+        dyn.set_pool(None)
+        b = job.setdefault("_bench", {})
+        b["sim_seconds"] = b.get("sim_seconds", 0.0) + dyn.BENCH["sim_seconds"]
+        b["cpu_seconds"] = b.get("cpu_seconds", 0.0) + dyn.BENCH["cpu_seconds"]
+        b["evaluations"] = b.get("evaluations", 0) + dyn.BENCH["evaluations"]
+        b["dyn_segments"] = dyn.BENCH["segments"]
+        if seg_pool is not None:
+            from services import parallel_sim
+            parallel_sim.close_pool(seg_pool, kill=bool(should_stop and should_stop()))
+
+
+async def _run_dynamic_inner(job, dcfg, strategy, sid, settings, cfg, tf, days,
+                             objective, min_trades, iterations, trade_space,
+                             should_stop, db, model, train_hist, full_histories,
+                             labels_full, split_idx, train_segs, test_segs, full_segs,
+                             stat_test_segs, inner_train, inner_val, static_keys,
+                             max_regimes, lookback_days, conf_min, min_hold_days,
+                             min_share, train_pct, rule_variants,
+                             per_regime_strategies, max_rules_regime,
+                             variant_indicators) -> Dict:
+    from services import dynamic_strategy as dyn
     job["phase"] = "Signal-Vorberechnung je Regime-Abschnitt"
     dyn.prepare_providers(strategy, train_segs, settings)
     dyn.prepare_providers(strategy, test_segs, settings)
@@ -816,6 +885,9 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
         done_work[0] += 1
         job["progress"] = 10 + round(done_work[0] / max(total_work, 1) * 80)
 
+    def set_phase(txt):
+        job["phase"] = txt
+
     learn_weights = {}
     if db is not None and (per_regime_strategies or rule_variants):
         from services import learning
@@ -827,15 +899,6 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     base_def_for_discovery = (copy.deepcopy(strategy.definition)
                               if getattr(strategy, "IS_CUSTOM", False)
                               and dcfg.get("start_from_base") else None)
-
-    # Walk-Forward INNERHALB jeder Marktphase: die Trainingsabschnitte werden
-    # nochmals geteilt. Eine Sub-Strategie/Konfiguration wird nur übernommen,
-    # wenn sie auf dem unbekannten Teil DERSELBEN Phase profitabel bleibt.
-    regime_wf = dcfg.get("regime_walk_forward", True)
-    inner_train, inner_val = (dyn.split_segments(train_segs, dcfg.get("regime_train_pct", 75))
-                              if regime_wf else (train_segs, None))
-    if inner_val:
-        job["phase"] = "Walk-Forward je Marktphase vorbereiten"
 
     regime_results = []
     configs: Dict[int, Dict] = {}
@@ -853,7 +916,7 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
                 inner_train, r["id"], settings, cfg, variant_indicators,
                 base_def_for_discovery, objective, min_tr_regime,
                 max_rules_regime, learn_weights, prog, should_stop,
-                val_segments=inner_val)
+                val_segments=inner_val, phase_cb=set_phase)
             if disc["rules"] and disc.get("definition"):
                 strat_r = _mk_strategy(disc["definition"])
                 strategies_by_regime[r["id"]] = strat_r
@@ -868,7 +931,7 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
         res_r = await dyn.optimize_regime(job, strat_r, inner_train, r["id"],
                                           settings, cfg, trade_space, iterations,
                                           objective, min_tr_regime, prog, should_stop,
-                                          val_segments=inner_val)
+                                          val_segments=inner_val, phase_cb=set_phase)
         if per_regime_strategies and str(r["id"]) in discovery_info:
             res_r["own_strategy"] = {
                 "rules": discovery_info[str(r["id"])]["rules"],
@@ -884,7 +947,8 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     job["phase"] = "Statische Benchmark: beste Einzel-Konfiguration (Vergleich)"
     static = await dyn.optimize_static(strategy, train_hist, settings, cfg,
                                        trade_space, iterations, objective,
-                                       min_trades, prog, should_stop)
+                                       min_trades, prog, should_stop,
+                                       data_keys=static_keys)
     # Fallback: Regime ohne genügend Trades nutzen die statische Konfiguration
     for r in regime_results:
         if r["insufficient"]:
@@ -922,14 +986,6 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
     dyn_test_m, _ = await dyn.eval_dynamic(strategy, test_segs, configs, cfg,
                                            settings, should_stop, strategies_by_regime)
     # Statisch auf Test: gleicher Segment-Mechanismus (fairer Vergleich mit Warmup)
-    stat_test_segs = {}
-    for s in full_histories:
-        si = split_idx[s]
-        if si < len(full_histories[s]):
-            stat_test_segs[s] = [{"regime": -1,
-                                  "start_ts": full_histories[s][si]["timestamp"],
-                                  "candles": full_histories[s][max(si - dyn.WARMUP_BARS, 0):],
-                                  "n_bars": len(full_histories[s]) - si}]
     dyn.prepare_providers(strategy, stat_test_segs, settings)
     stat_test_m, _ = await dyn.eval_dynamic(strategy, stat_test_segs,
                                             {-1: static["config"]}, cfg,
@@ -939,7 +995,6 @@ async def _run_dynamic(job, body, registry, settings, cfg, robust, full_historie
 
     # Equity/CSV-Export: dynamischer Verlauf über den GESAMTEN Zeitraum
     job["phase"] = "Equity/Trades sammeln (dynamischer Gesamtverlauf)"
-    full_segs = dyn.build_segments(full_histories, labels_full)
     dyn.prepare_providers(strategy, full_segs, settings)
     full_m, full_rows = await dyn.eval_dynamic(strategy, full_segs, configs, cfg,
                                                settings, should_stop, strategies_by_regime)
@@ -1105,7 +1160,9 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
         try:
             from services import parallel_sim
             workers = parallel_sim.workers_configured()
-            if workers > 1:
+            # Im Dynamik-Modus wird der Pool in _run_dynamic mit den
+            # Regime-Abschnitten gebaut (feinere Aufteilung, alle Kerne).
+            if workers > 1 and mode != "dynamic":
                 pool = parallel_sim.make_pool(histories, workers)
         except Exception as e:
             logger.warning(f"Multi-Core deaktiviert: {e}")
@@ -1250,6 +1307,7 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
             {"data_seconds": data_seconds, "sim_seconds": b.get("sim_seconds", 0.0),
              "cpu_seconds": b.get("cpu_seconds", 0.0), "workers": workers,
              "evaluations": b.get("evaluations", 0),
+             "dyn_segments": b.get("dyn_segments", 0),
              "sim_candles": sum(len(c) for c in histories.values()),
              "raw_candles": raw_candles},
             t_start, dl_before, _cc.download_stats(), job.get("execution") or "cloud")

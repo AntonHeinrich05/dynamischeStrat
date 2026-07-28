@@ -70,7 +70,31 @@ und ein abgestürzter Job meldete gar nichts zurück (UI hing bis Timeout).
 - `/app/ANLEITUNG_DYNAMISCHE_STRATEGIEN.md`: Bedienung, Walk-Forward-Logik,
   Worker-Update, „Warum finde ich keine guten Strategien?"
 
+### Multi-Core im Dynamik-Modus (28.07.2026, Nachtrag)
+Nutzer-Beobachtung: „Worker zeigt keine Infos, RAM nur 2000 MB statt 5000 MB".
+- **Ursache gefunden**: `_run_dynamic` hat `parallel_sim` nie benutzt – der komplette
+  dynamische Modus (Regime-Optimierung, Regel-Discovery, statische Benchmark) lief
+  auf **einem** Kern. `run_optimizer` baute zwar einen Pool über die Symbol-Historien,
+  der wurde im Dynamik-Modus aber nie angesprochen.
+- `parallel_sim.sim_segment_task` / `sim_segment_task_timed` / `static_metrics_task` neu
+- `dynamic_strategy`: `set_pool()`, `register_segments()`, `_rows_for()` – `eval_regime_config`,
+  `eval_dynamic` und `optimize_static` verteilen jetzt über alle Kerne
+- `_run_dynamic` baut einen eigenen Pool über **alle Regime-Abschnitte** (feinere
+  Aufteilung als pro Symbol), `run_optimizer` überspringt dafür den Symbol-Pool
+- Gemessen (720 Tage, 5m, 4 Regime, Regel-Suche, 25 Iterationen): **18 s**,
+  Speedup 4,95× auf 8 Kernen, 6713 Abschnitts-Simulationen.
+  Ergebnis **bit-identisch** zum sequenziellen Lauf (diff-verifiziert)
+- `BENCH`-Zähler in `dynamic_strategy` → `job['_bench']` → `result.benchmark`
+- Worker-Fenster: `_relay_progress` loggt alle ~6 s Phase/Fortschritt/Dauer/RAM/Prozesse;
+  Job-Start und -Ende mit Kennzahlen. Phasen-Texte jetzt granular
+  („Marktphase 2: Regel 1/3 – teste 8/19 (MACD Momentum)")
+- `local_exec.apply_result` stempelt `benchmark.execution = "local"` + `worker_name`
+  (vorher stand im UI fälschlich „Cloud")
+- `BenchmarkBar`: neues Feld „Lokal · <PC-Name>" / „Cloud" + Regime-Abschnitte
+- Hinweis: der geringere RAM-Verbrauch ist gewollt (spaltenbasierte Kerzen)
+
 ### Offen / Backlog
+
 - P0: Live-Scanner schaltet bei Regimewechsel noch nicht auf die Sub-Strategie-Regeln um
   (Backtest + Anzeige sind fertig)
 - P0: Worker-Selbstaktualisierung (Code-Update ohne manuelles Zip)

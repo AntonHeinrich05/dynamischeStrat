@@ -1,0 +1,34 @@
+{
+  "summary": "Iter16 verified the ProcessPool refactor in optimizer (_run_dynamic now uses parallel pool across all regime segments) and the new benchmark fields (execution/worker_name/dyn_segments) on both backend and frontend. Backend pytest: 10/10 pass (after fixing 2 test-side bugs). Verified: (a) mode=params cloud 90d/5m/iter=20 -> done, benchmark.execution='cloud', evaluations>0; (b) mode=discovery cloud 90d/5m -> done, top5>=1, evaluations>0; (c) mode=combo cloud 90d/5m -> done (only failed initially in parallel xdist run because a sibling test called /api/optimizer/reset which cancelled the running job - serial re-run passes; not a product bug); (d) mode=dynamic per_regime_strategies=true 180d/5m/iter=10/min_trades=20/3 indicators -> done, dyn.regimes[] with metrics+validation_passed, sub_strategies, regime_walk_forward=true, benchmark.dyn_segments>0 and evaluations>0; (e) same with per_regime_strategies=false -> done, regimes[]>=1, dyn_segments>0; (f) cloud POST /api/backtest/run BTCUSDT+ETHUSDT 90d/5m -> done, per_pair (returned as list) contains trades>0, CSV kind=trades and kind=candles export both return CSV rows>=2; (g) /api/dynamic/current-regime BTC 60d 5m -> current+regimes[]+timeline[]; (h) /api/localworker/status -> required_version=1.4.0 (workers list contains 1 stale offline entry from previous test session, not blocking). Frontend UI: Optimizer opens via data-testid='optimizer-button'; 'Verlauf' tab lists 20+ history rows; clicking a dynamic row loads data-testid='opt-benchmark' containing data-testid='opt-benchmark-execution' with text 'Cloud' and bench text includes '1 Kern' + 'Regime-Abschnitte simuliert'; Modus 'Dynamische Strategie' -> data-testid='dyn-per-regime' toggling reveals data-testid='dyn-max-rules-regime' + data-testid='dyn-start-from-base', indicators section (RSI, EMA Fast, ...) visible, data-testid='dyn-rule-variants' becomes disabled=True; DynamicPanel data-testid='dyn-panel-toggle' opens, data-testid='live-regime-card' present, data-testid='live-regime-run' triggers data-testid='live-regime-result' within ~15s showing current phase 'BTC · Jetzt: Seitwärtsmarkt · mittlere Volatilität · Sicherheit: 78%' + shares + timeline. No local worker was started (kept offline as instructed) so local-execution branch of BenchmarkBar ('Lokal · <PC>') was only inspected in code - review author already manually validated local run in prior session.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Optimizer (dev only)", "issues": ["Persistent hydration warning '<span> cannot be a child of <option>' from DAY_OPTIONS select in Optimizer.js line 533 - non-blocking dev instrumentation artefact (flagged since iter13)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_optimizer_pool_regression.py",
+    "/app/test_reports/pytest/iter16.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ProcessPool refactor in optimizer._run_dynamic looks clean: pool built once in _run_dynamic, dynamic_strategy.set_pool + register_segments distribute all eval_regime_config/eval_dynamic/optimize_static tasks; job['_bench'] is captured in finally-block and correctly propagated to _build_benchmark (dyn_segments + evaluations both populated for both per_regime_strategies branches).",
+    "backend/services/backtester.py _build_benchmark now surfaces execution/worker_name/dyn_segments cleanly - BenchmarkBar renders 'Cloud'/'Lokal · <PC>' + 'Regime-Abschnitte simuliert' as expected.",
+    "GET /api/optimizer/history summary rows do NOT include benchmark.execution or dyn_segments in the compact projection - UI has to load full result via /api/optimizer/result/{id} to render BenchmarkBar (which currently works because clicking a history row triggers that fetch). Minor: consider surfacing execution in the history table so users can spot local-vs-cloud at a glance without loading.",
+    "Optimizer.js still >1280 lines (repeat suggestion from iter13/15); DAY_OPTIONS <span> hydration warning still not fixed.",
+    "Test-side note: /api/optimizer/reset cancels ALL running optimizer jobs (including sibling xdist workers). Consider gating reset to only the caller's active job or the completed/idle queue, so parallel test suites don't cross-cancel each other. Not a product bug but a nice UX safety-net."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_optimizer_pool_regression.py",
+    "/app/test_reports/iteration_16.json"
+  ],
+  "success_rate": {"backend": "100% (10/10 after serial retry of combo which was cancelled by xdist parallel reset)", "frontend": "100% (all requested data-testid selectors present + populated)"},
+  "test_credentials": "Admin / admin via POST /api/auth/login (see /app/memory/test_credentials.md)",
+  "seed_data_creation": "None new. custom_3a7f5e25 'RSI Basis Test' used untouched. History already contains dynamic + params + discovery + combo runs from prior iterations plus new ones from this run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "No local worker running (was intentionally stopped before iter16). Backend BASE_URL = REACT_APP_BACKEND_URL. Login endpoint POST /api/auth/login {username,password}. Optimizer endpoints: POST /api/optimizer/run, GET /api/optimizer/status/{id}, POST /api/optimizer/reset (cancels all running jobs - beware with xdist parallel!), GET /api/optimizer/history?limit=N (compact), GET /api/optimizer/result/{id} (full). Backtest CSV export: GET /api/backtest/export/{id}?kind=candles|trades. per_pair from backtest result is a LIST not a dict in current API. Frontend BenchmarkBar renders 'Lokal · <worker_name>' when b.execution=='local' AND b.worker_name is set; 'Kerne · Speedup NN×' only shown when workers>1 (single-core shows '1 Kern' instead); 'Regime-Abschnitte simuliert' shown only when b.dyn_segments>0. pytest.ini runs with -n 2 --dist loadscope so distinct classes/files can run in parallel - keep destructive shared-state calls (like /api/optimizer/reset) in the same class or add serial marker.",
+  "rca of the issue": "N/A - all features working. Two initial test failures were test-side: (1) assumed per_pair is dict but API returns list -> fixed test to accept both. (2) test_combo was cancelled by parallel xdist worker calling /api/optimizer/reset - re-ran serially and passes; recommend not calling reset between parallel tests."
+}

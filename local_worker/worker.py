@@ -259,7 +259,12 @@ def _mk_job(jobs_dict, job_id):
 
 
 async def _relay_progress(api, job_id, job, extra_best=False):
-    """Fortschritt an den Server melden bis der Job fertig ist; Abbruch übernehmen."""
+    """Fortschritt an den Server melden bis der Job fertig ist; Abbruch übernehmen.
+    Zusätzlich alle ~6 s eine Zeile im Worker-Fenster, damit sichtbar ist, was
+    der PC gerade rechnet (Phase, Fortschritt, RAM, Kerne)."""
+    t0 = time.time()
+    last_log = 0.0
+    last_phase = None
     while job["status"] == "running":
         payload = {"progress": job.get("progress"), "phase": job.get("phase")}
         if extra_best and job.get("best") is not None:
@@ -270,6 +275,14 @@ async def _relay_progress(api, job_id, job, extra_best=False):
                 job["cancel"] = True
         except Exception as e:
             logger.warning(f"Progress-Meldung fehlgeschlagen: {e}")
+        now = time.time()
+        phase = job.get("phase")
+        if now - last_log >= 6 or phase != last_phase:
+            r = resources()
+            logger.info(f"  … {job.get('progress') or 0:>3}% · {phase or '–'} "
+                        f"· {int(now - t0)}s · RAM {r.get('ram_used_mb', 0)} MB "
+                        f"· {_sim_workers_effective()} Prozesse")
+            last_log, last_phase = now, phase
         await asyncio.sleep(1.2)
 
 
@@ -316,7 +329,10 @@ async def handle_backtest(api, job_spec, index):
     a = job_spec["payload"]["args"]
     registry_mod.registry.load_custom(job_spec["payload"].get("custom_definitions") or [])
     job = _mk_job(bt.JOBS, job_id)
-    logger.info(f"Backtest {job_id}: {a['strategy_ids']} auf {a['symbols']} ({a['days']} Tage)")
+    logger.info(f"Backtest {job_id}: {a['strategy_ids']} auf {a['symbols']} "
+                f"({a['days']} Tage, TF {a.get('default_timeframe') or '?'}) "
+                f"· {_sim_workers_effective()} Prozesse · lokal")
+    t_start = time.time()
     relay = asyncio.create_task(_relay_progress(api, job_id, job))
     try:
         # Rechnung in eigenem Thread/Loop -> Poll-Heartbeat bleibt aktiv.
@@ -344,8 +360,14 @@ async def handle_backtest(api, job_spec, index):
                 await asyncio.to_thread(index.update_from_cache, sym)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Speichern von {sym} fehlgeschlagen: {e}")
+    res = job.get("result") or {}
+    pairs = res.get("per_pair") or []
+    trades = sum(int(p.get("trades") or 0) for p in pairs)
+    candles = sum(int(p.get("candles") or 0) for p in pairs)
     bt.JOBS.pop(job_id, None)
-    logger.info(f"Backtest {job_id} fertig: {job['status']}")
+    logger.info(f"Backtest {job_id} fertig: {job['status']} · {int(time.time() - t_start)}s "
+                f"· {candles} Kerzen · {trades} Trades"
+                + (f" · Fehler: {job['error']}" if job.get("error") else ""))
 
 
 async def handle_optimizer(api, job_spec, index):
@@ -355,7 +377,11 @@ async def handle_optimizer(api, job_spec, index):
     job = _mk_job(opt.JOBS, job_id)
     job["best"] = None
     body = a["body"]
-    logger.info(f"Optimizer {job_id}: mode={body.get('mode')} auf {body.get('symbols')}")
+    logger.info(f"Optimizer {job_id}: mode={body.get('mode')} auf {body.get('symbols')} "
+                f"({body.get('days')} Tage, TF {body.get('timeframe')}, "
+                f"{body.get('iterations')} Iterationen) "
+                f"· {_sim_workers_effective()} Prozesse · lokal")
+    t_start = time.time()
     relay = asyncio.create_task(_relay_progress(api, job_id, job, extra_best=True))
     try:
         await _run_isolated(lambda: opt.run_optimizer(
@@ -380,8 +406,12 @@ async def handle_optimizer(api, job_spec, index):
                 await asyncio.to_thread(index.update_from_cache, sym)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Speichern von {sym} fehlgeschlagen: {e}")
+    res = job.get("result") or {}
+    bench = (res.get("benchmark") or {}) if isinstance(res, dict) else {}
     opt.JOBS.pop(job_id, None)
-    logger.info(f"Optimizer {job_id} fertig: {job['status']}")
+    logger.info(f"Optimizer {job_id} fertig: {job['status']} · {int(time.time() - t_start)}s"
+                + (f" · {bench.get('evaluations')} Bewertungen" if bench.get("evaluations") else "")
+                + (f" · Fehler: {job['error']}" if job.get("error") else ""))
 
 
 async def handle_data_job(api, job_spec, index):

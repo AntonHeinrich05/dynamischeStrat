@@ -834,6 +834,8 @@ def _build_benchmark(bench: Dict, t_start: float, dl_before: Dict, dl_after: Dic
         "parallel_speedup": max(speedup, 1.0),
         "pairs": bench.get("pairs", 0),
         "evaluations": bench.get("evaluations"),
+        "dyn_segments": bench.get("dyn_segments", 0),
+        "worker_name": bench.get("worker_name"),
         "sim_candles": bench.get("sim_candles", 0),
         "raw_candles": raw,
         "downloaded_candles": downloaded,

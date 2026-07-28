@@ -79,10 +79,35 @@ ersten Zugriff automatisch in das neue, viel schnellere `.npy`-Format umgewandel
   5400 Tage 1-Minuten-Kerzen brauchen **373 MB statt ~3,3 GB** RAM.
   Genau das war die Ursache für die Abstürze beim Laden gespeicherter Kerzen.
 - Laden von Platte: **~0,1 s statt Minuten**; Aggregation auf 5m: ~0,2 s.
+- **Der dynamische Modus nutzt jetzt alle CPU-Kerne.** Vorher lief er komplett
+  auf einem einzigen Kern – das war der Grund, warum dein PC beim Suchen
+  „nichts gemacht" hat. Jetzt werden alle Regime-Abschnitte auf die Prozesse verteilt
+  (gemessen: Speedup ~5× auf 8 Kernen, 720 Tage/5m mit Regel-Suche in 18 s).
+  Das Ergebnis ist bit-identisch zur sequenziellen Rechnung (verifiziert).
 - Ein abgestürzter Job meldet jetzt **immer** einen Fehler zurück, statt die
   Website bis zum Timeout hängen zu lassen.
 - Ergebnis-Upload wird bis zu 5-mal wiederholt.
 - Timeouts sind großzügiger (Heartbeat 90 s, Job-Stillstand 15 min).
+
+### Woran erkenne ich, dass der PC wirklich rechnet?
+**Im Worker-Fenster** erscheint jetzt alle ~6 Sekunden eine Zeile, z. B.:
+
+```
+Optimizer 45ff4fcf: mode=dynamic auf ['BTCUSDT'] (720 Tage, TF 5m, 25 Iterationen) · 8 Prozesse · lokal
+  …  35% · Marktphase 2: Regel 1/3 – teste 8/19 (MACD Momentum) · 9s · RAM 16557 MB · 8 Prozesse
+  …  80% · Statische Benchmark: beste Einzel-Konfiguration · 13s · RAM 17117 MB · 8 Prozesse
+Optimizer 45ff4fcf fertig: done · 18s · 262 Bewertungen
+```
+
+**In der Website** steht über dem Ergebnis eine Laufzeit-Leiste:
+`Lokal · DEIN-PC | 18s | 8 Kerne · Speedup 5.0× | Cache 100% | 262 Evaluierungen · 6.713 Regime-Abschnitte`.
+Steht dort „Cloud", lief der Job **nicht** auf deinem PC.
+
+### Warum braucht der Worker jetzt weniger RAM als vorher?
+Weil die Kerzen ~10× kompakter liegen. **Weniger RAM ist hier das Ziel, nicht ein Fehler** –
+vorher waren die 5 GB der Grund für die Abstürze. Wenn du die Maschine stärker auslasten
+willst, dreh an den Stellen, die wirklich Rechenarbeit erzeugen: mehr Coins,
+längerer Zeitraum, mehr Iterationen, mehr Marktphasen, mehr Indikatoren.
 
 ### RAM-Limit
 Im Worker-Panel unter *Einstellungen*. 1 MB entspricht jetzt ca. 20.000 Kerzen

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Timer, Cpu, Database, DownloadSimple } from '@phosphor-icons/react';
+import { Timer, Cpu, Database, DownloadSimple, Desktop, Cloud } from '@phosphor-icons/react';
 import './BenchmarkBar.css';
 
 const fmtSec = (s) => {
@@ -16,6 +16,14 @@ export default function BenchmarkBar({ b, testid = 'benchmark-bar' }) {
   const mc = (b.workers || 1) > 1;
   return (
     <div className="bench-bar" data-testid={testid}>
+      <span className={`bench-item ${local ? 'good' : ''}`}
+        title={local
+          ? `Berechnet auf dem lokalen PC${b.worker_name ? ` (${b.worker_name})` : ''} – nicht in der Cloud`
+          : 'In der Cloud berechnet. Für mehr Tempo: lokalen Worker starten'}
+        data-testid={`${testid}-execution`}>
+        {local ? <Desktop size={13} weight="bold" /> : <Cloud size={13} weight="bold" />}
+        {local ? `Lokal${b.worker_name ? ` · ${b.worker_name}` : ''}` : 'Cloud'}
+      </span>
       <span className="bench-item" title="Gesamtlaufzeit · davon Daten laden / Simulation">
         <Timer size={13} weight="bold" />
         {fmtSec(b.total_seconds)}
@@ -50,6 +58,9 @@ export default function BenchmarkBar({ b, testid = 'benchmark-bar' }) {
         {b.evaluations != null
           ? `${fmtNum(b.evaluations)} Evaluierungen`
           : `${b.pairs || 0} Paare`} · {fmtNum(b.sim_candles)} Kerzen
+        {b.dyn_segments > 0 && (
+          <span className="bench-sub">{fmtNum(b.dyn_segments)} Regime-Abschnitte simuliert</span>
+        )}
       </span>
     </div>
   );

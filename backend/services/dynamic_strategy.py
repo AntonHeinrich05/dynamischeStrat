@@ -17,6 +17,7 @@ import copy
 import json
 import logging
 import random
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -92,7 +93,10 @@ def _provider_for(strategy, candles, settings, sym):
 def prepare_providers(strategy, segments: Dict[str, List[Dict]], settings: Dict):
     """FastSeries + Signal-Provider je Segment EINMAL bauen. Signale hängen nur
     von den Regeln ab (nicht von den Trade-Parametern) und werden für alle
-    Kandidaten wiederverwendet; Regel-Varianten teilen sich die FastSeries."""
+    Kandidaten wiederverwendet; Regel-Varianten teilen sich die FastSeries.
+    Im Multi-Core-Modus passiert das in den Kind-Prozessen (dort gecacht)."""
+    if _POOL is not None:
+        return
     for sym, segs in segments.items():
         for seg in segs:
             try:
@@ -100,6 +104,75 @@ def prepare_providers(strategy, segments: Dict[str, List[Dict]], settings: Dict)
             except Exception:  # noqa: BLE001
                 seg["fs"] = None
             seg["provider"] = provider_for_seg(strategy, seg, settings, sym)
+
+
+# ---------------- Multi-Core-Ausführung der Regime-Abschnitte ----------------
+_POOL = None          # ProcessPoolExecutor oder None (sequenziell)
+_KEY_SEQ = [0]
+# Laufzeit-Zähler für die Benchmark-Anzeige (Kerne/Speedup im UI)
+BENCH = {"evaluations": 0, "cpu_seconds": 0.0, "sim_seconds": 0.0, "segments": 0}
+
+
+def reset_bench():
+    BENCH.update({"evaluations": 0, "cpu_seconds": 0.0, "sim_seconds": 0.0,
+                  "segments": 0})
+
+
+def set_pool(pool):
+    """Prozess-Pool für die Segment-Simulation setzen (None = sequenziell)."""
+    global _POOL
+    _POOL = pool
+
+
+def register_segments(*segment_maps) -> Dict[str, object]:
+    """Jedem Abschnitt einen eindeutigen Schlüssel geben und die Kerzen-Daten
+    sammeln, damit die Kind-Prozesse sie einmalig erhalten."""
+    data: Dict[str, object] = {}
+    for segments in segment_maps:
+        if not segments:
+            continue
+        for sym, segs in segments.items():
+            for seg in segs:
+                if not seg.get("_key"):
+                    _KEY_SEQ[0] += 1
+                    seg["_key"] = f"{sym}#seg{_KEY_SEQ[0]}"
+                data[seg["_key"]] = seg["candles"]
+    return data
+
+
+async def _rows_for(strategy, segs: List[tuple], settings: Dict, cfg_for,
+                    should_stop=None) -> List[Dict]:
+    """segs: Liste von (sym, seg). Läuft über alle CPU-Kerne, wenn ein Pool
+    gesetzt ist – sonst sequenziell im Thread (identisches Ergebnis)."""
+    t_wall = time.perf_counter()
+    BENCH["evaluations"] += 1
+    BENCH["segments"] += len(segs)
+    if _POOL is None:
+        out = []
+        for sym, seg in segs:
+            if should_stop and should_stop():
+                raise JobCancelled()
+            st = strategy(seg) if callable(strategy) else strategy
+            t0 = time.perf_counter()
+            out.append((seg, await asyncio.to_thread(
+                simulate_segment, st, seg, sym, settings, cfg_for(seg), should_stop)))
+            BENCH["cpu_seconds"] += time.perf_counter() - t0
+        BENCH["sim_seconds"] += time.perf_counter() - t_wall
+        return out
+    from services import parallel_sim
+    if should_stop and should_stop():
+        raise JobCancelled()
+    loop = asyncio.get_running_loop()
+    futs = []
+    for sym, seg in segs:
+        st = strategy(seg) if callable(strategy) else strategy
+        futs.append(loop.run_in_executor(
+            _POOL, parallel_sim.sim_segment_task_timed, parallel_sim.strategy_spec(st),
+            seg["_key"], sym, settings, cfg_for(seg), _iso(seg["start_ts"])))
+    timed = await asyncio.gather(*futs)
+    BENCH["cpu_seconds"] += sum(d for _, d in timed)
+    BENCH["sim_seconds"] += time.perf_counter() - t_wall
+    return list(zip([s for _, s in segs], [rows for rows, _ in timed]))
 
 
 def _def_key(strategy) -> str:
@@ -157,15 +230,12 @@ def simulate_segment(strategy, seg: Dict, sym: str, settings: Dict, cfg: Dict,
 async def eval_regime_config(strategy, segments: Dict[str, List[Dict]], rid: int,
                              settings: Dict, cfg: Dict, should_stop=None) -> Dict:
     """Eine Trade-Konfiguration auf allen Segmenten EINES Regimes bewerten."""
+    segs = [(sym, seg) for sym, ss in segments.items() for seg in ss
+            if seg["regime"] == rid]
     rows = []
-    for sym, segs in segments.items():
-        for seg in segs:
-            if seg["regime"] != rid:
-                continue
-            if should_stop and should_stop():
-                raise JobCancelled()
-            rows.extend(await asyncio.to_thread(
-                simulate_segment, strategy, seg, sym, settings, cfg, should_stop))
+    for _seg, trades in await _rows_for(strategy, segs, settings, lambda s: cfg,
+                                        should_stop):
+        rows.extend(trades)
     return metrics_from_rows(rows, cfg.get("max_capital", 100))
 
 
@@ -175,17 +245,15 @@ async def eval_dynamic(strategy, segments: Dict[str, List[Dict]],
                        ) -> Tuple[Dict, List[Dict]]:
     """Komplette dynamische Simulation: jedes Segment mit der Sub-Strategie und
     Konfiguration seines Regimes; chronologisch zusammengeführt."""
+    segs = [(sym, seg) for sym, ss in segments.items() for seg in ss]
+    sym_of = {id(seg): sym for sym, seg in segs}
+    by_regime = strategies_by_regime or {}
     rows = []
-    for sym, segs in segments.items():
-        for seg in segs:
-            if should_stop and should_stop():
-                raise JobCancelled()
-            tp = configs.get(seg["regime"]) or {}
-            cfg = {**base_cfg, **tp}
-            st = (strategies_by_regime or {}).get(seg["regime"]) or strategy
-            for t in await asyncio.to_thread(simulate_segment, st, seg, sym,
-                                             settings, cfg, should_stop, None):
-                rows.append({**t, "symbol": sym, "regime": seg["regime"]})
+    for seg, trades in await _rows_for(
+            lambda s: by_regime.get(s["regime"]) or strategy, segs, settings,
+            lambda s: {**base_cfg, **(configs.get(s["regime"]) or {})}, should_stop):
+        for t in trades:
+            rows.append({**t, "symbol": sym_of.get(id(seg)), "regime": seg["regime"]})
     return metrics_from_rows(rows, base_cfg.get("max_capital", 100)), rows
 
 
@@ -257,7 +325,8 @@ async def discover_regime_strategy(segments: Dict[str, List[Dict]], rid: int,
                                    objective: str, min_trades: int,
                                    max_rules: int = 4, weights: Dict = None,
                                    progress=None, should_stop=None,
-                                   val_segments: Dict[str, List[Dict]] = None) -> Dict:
+                                   val_segments: Dict[str, List[Dict]] = None,
+                                   phase_cb=None) -> Dict:
     """Vollständige eigene Strategie für EIN Regime entdecken.
 
     Gleicher Greedy-Algorithmus wie die globale Discovery, aber ausschließlich
@@ -311,11 +380,14 @@ async def discover_regime_strategy(segments: Dict[str, List[Dict]], rid: int,
     used = set()
     for round_i in range(max_rules):
         round_best = None
-        for cand in cands:
+        for ci, cand in enumerate(cands):
             if cand["label"] in used:
                 continue
             if should_stop and should_stop():
                 raise JobCancelled()
+            if phase_cb:
+                phase_cb(f"Marktphase {rid + 1}: Regel {round_i + 1}/{max_rules} – "
+                         f"teste {ci + 1}/{len(cands)} ({cand['label']})")
             d = {**definition,
                  "long_rules": definition["long_rules"] + [dict(cand["long"])],
                  "short_rules": definition["short_rules"] + [dict(cand["short"])]}
@@ -373,18 +445,21 @@ async def discover_regime_strategy(segments: Dict[str, List[Dict]], rid: int,
 async def optimize_regime(job, strategy, segments, rid: int, settings, base_cfg,
                           trade_space, iterations: int, objective: str,
                           min_trades: int, progress=None, should_stop=None,
-                          val_segments=None) -> Dict:
+                          val_segments=None, **kwargs) -> Dict:
     """Random-Search der Trade-Parameter NUR auf den Daten eines Regimes.
     Zu wenig Trades -> Regime als 'insufficient' markiert (Fallback greift).
     Mit `val_segments` muss die gewählte Konfiguration zusätzlich auf den
     unbekannten Daten derselben Marktphase profitabel sein (Walk-Forward)."""
     rng = random.Random(1000 + rid)
+    phase_cb = kwargs.get("phase_cb")
     base_m = await eval_regime_config(strategy, segments, rid, settings, base_cfg,
                                       should_stop)
     cands = [({}, base_m, _score(base_m, objective))]
     for it in range(iterations):
         if should_stop and should_stop():
             raise JobCancelled()
+        if phase_cb:
+            phase_cb(f"Marktphase {rid + 1}: Trade-Parameter {it + 1}/{iterations}")
         tp = sample_config(trade_space, rng)
         m = await eval_regime_config(strategy, segments, rid, settings,
                                      {**base_cfg, **tp}, should_stop)
@@ -416,35 +491,63 @@ async def optimize_regime(job, strategy, segments, rid: int, settings, base_cfg,
 
 async def optimize_static(strategy, full_train: Dict[str, List[Dict]], settings,
                           base_cfg, trade_space, iterations: int, objective: str,
-                          min_trades: int, progress=None, should_stop=None) -> Dict:
+                          min_trades: int, progress=None, should_stop=None,
+                          data_keys: Dict[str, str] = None) -> Dict:
     """Statische Benchmark: beste EINZELNE Konfiguration auf den gesamten
-    Trainingsdaten (gleiches Suchbudget wie ein Regime)."""
-    providers = {sym: _provider_for(strategy, c, settings, sym)[0]
-                 for sym, c in full_train.items()}
+    Trainingsdaten (gleiches Suchbudget wie ein Regime).
+    Mit Prozess-Pool werden die Konfigurationen über alle Kerne verteilt."""
+    rng = random.Random(7)
+    cfgs = [{}] + [sample_config(trade_space, rng) for _ in range(iterations)]
 
-    async def _eval(cfg):
-        rows = []
-        for sym, candles in full_train.items():
+    if _POOL is not None and data_keys:
+        from services import parallel_sim
+        loop = asyncio.get_running_loop()
+        spec = parallel_sim.strategy_spec(strategy)
+        syms = list(full_train.keys())
+        keys = [data_keys[s] for s in syms]
+        cap = base_cfg.get("max_capital", 100)
+        batch = max(getattr(_POOL, "_max_workers", 4) * 2, 4)
+        results = []
+        for i in range(0, len(cfgs), batch):
             if should_stop and should_stop():
                 raise JobCancelled()
-            res = await asyncio.to_thread(simulate_pair, strategy, candles, sym,
-                                          settings, cfg, None, True, should_stop,
-                                          providers.get(sym))
-            rows.extend(res.get("all_trades") or [])
-        return metrics_from_rows(rows, cfg.get("max_capital", 100))
+            chunk = cfgs[i:i + batch]
+            futs = [loop.run_in_executor(_POOL, parallel_sim.static_metrics_task,
+                                         spec, keys, syms, settings,
+                                         {**base_cfg, **tp}, cap)
+                    for tp in chunk]
+            results.extend(await asyncio.gather(*futs))
+            if progress:
+                progress(len(chunk))
+        pairs = list(zip(cfgs, results))
+    else:
+        providers = {sym: _provider_for(strategy, c, settings, sym)[0]
+                     for sym, c in full_train.items()}
 
-    rng = random.Random(7)
-    best_tp, best_m = {}, await _eval(base_cfg)
+        async def _eval(cfg):
+            rows = []
+            for sym, candles in full_train.items():
+                if should_stop and should_stop():
+                    raise JobCancelled()
+                res = await asyncio.to_thread(simulate_pair, strategy, candles, sym,
+                                              settings, cfg, None, True, should_stop,
+                                              providers.get(sym))
+                rows.extend(res.get("all_trades") or [])
+            return metrics_from_rows(rows, cfg.get("max_capital", 100))
+
+        pairs = []
+        for i, tp in enumerate(cfgs):
+            pairs.append((tp, await _eval({**base_cfg, **tp})))
+            if progress:
+                progress(i + 1)
+
+    best_tp, best_m = pairs[0]
     best_sc = _score(best_m, objective)
-    for it in range(iterations):
-        tp = sample_config(trade_space, rng)
-        m = await _eval({**base_cfg, **tp})
+    for tp, m in pairs[1:]:
         if m["trades"] >= min_trades:
             sc = _score(m, objective)
             if sc > best_sc or best_m["trades"] < min_trades:
                 best_sc, best_tp, best_m = sc, tp, m
-        if progress:
-            progress(it + 1)
     return {"config": best_tp, "metrics": best_m, "score": round(best_sc, 3)}
 
 

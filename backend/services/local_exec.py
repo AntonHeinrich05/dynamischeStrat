@@ -311,6 +311,13 @@ async def apply_result(job_id: str, data: Dict, db):
         return
     job["status"] = status
     job["error"] = data.get("error")
+    # Der Worker kennt seinen eigenen Ausführungsmodus nicht -> hier stempeln,
+    # damit die Laufzeit-Anzeige korrekt "lokal" statt "cloud" zeigt.
+    res = data.get("result")
+    if isinstance(res, dict) and isinstance(res.get("benchmark"), dict):
+        res["benchmark"]["execution"] = "local"
+        wid = (meta or {}).get("worker_id")
+        res["benchmark"]["worker_name"] = (WORKERS.get(wid) or {}).get("name") if wid else None
     if status == "done":
         job["progress"] = 100
         job["phase"] = "Fertig (lokal berechnet)"
