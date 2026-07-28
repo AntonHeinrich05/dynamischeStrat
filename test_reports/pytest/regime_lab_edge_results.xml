@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="8.279" timestamp="2026-07-28T13:44:09.068125+00:00" hostname="agent-env-4d1d96fd-6458-4733-8a3a-52d2698abc6b"><testcase classname="tests.test_regime_lab.TestRegimeLabWorkflow" name="test_04a_keep_rejects_missing_regime_id" time="7.384"><failure message="AssertionError: Internal Server Error&#10;assert 500 in (400, 422)&#10; +  where 500 = &lt;Response [500]&gt;.status_code">backend/tests/test_regime_lab.py:123: in test_04a_keep_rejects_missing_regime_id
+    assert response.status_code in (400, 422), response.text
+E   AssertionError: Internal Server Error
+E   assert 500 in (400, 422)
+E    +  where 500 = &lt;Response [500]&gt;.status_code</failure></testcase><testcase classname="tests.test_regime_lab.TestRegimeLabWorkflow" name="test_04b_discarded_regime_is_excluded_from_build" time="0.303"><failure message="AssertionError: {'status': 'success', 'id': 'dyn_734c9d84', 'strategy_id': 'custom_cbc92f92', 'regimes': [0, 1]}&#10;assert 'combined:1' in [0, 1]&#10; +  where [0, 1] = &lt;built-in method get of dict object at 0xfdc9463d8a80&gt;('regimes', [])&#10; +    where &lt;built-in method get of dict object at 0xfdc9463d8a80&gt; = {'status': 'success', 'id': 'dyn_734c9d84', 'strategy_id': 'custom_cbc92f92', 'regimes': [0, 1]}.get">backend/tests/test_regime_lab.py:143: in test_04b_discarded_regime_is_excluded_from_build
+    assert "combined:1" in data.get("regimes", []), data
+E   AssertionError: {'status': 'success', 'id': 'dyn_734c9d84', 'strategy_id': 'custom_cbc92f92', 'regimes': [0, 1]}
+E   assert 'combined:1' in [0, 1]
+E    +  where [0, 1] = &lt;built-in method get of dict object at 0xfdc9463d8a80&gt;('regimes', [])
+E    +    where &lt;built-in method get of dict object at 0xfdc9463d8a80&gt; = {'status': 'success', 'id': 'dyn_734c9d84', 'strategy_id': 'custom_cbc92f92', 'regimes': [0, 1]}.get</failure></testcase></testsuite></testsuites>

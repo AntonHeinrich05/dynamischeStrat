@@ -1,0 +1,60 @@
+{
+  "summary": "Regime-Lab backend workflow, guards, persistence, label plausibility, keep/build behavior, and regression APIs were tested against the public URL. Frontend admin login, Regime-Lab modal/detail/charts/config UI/WF result plus Optimizer and Backtester regressions were exercised. Backend: 9/12 tests passed; frontend tested flows passed.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/regime-lab/ra_c8206904",
+        "issue": "Persisted analysis contains regime 0 labeled 'Seitwärtsmarkt' although stats.trend_strength is 1.18. This violates the required label invariant and propagates into the existing dynamic strategy. Newly created analyses use the corrected label logic, so stored analyses need migration/relabeling.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "POST /api/regime-lab/{id}/build",
+        "issue": "A regime marked kept=false is still included in the built dynamic strategy. Reproduced on ra_c8206904: after discarding combined regime 0, build returned regimes [0,1].",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/regime-lab/{id}/keep",
+        "issue": "Missing regime_id returns 500 Internal Server Error instead of 400/422; backend log shows int(None) TypeError at regime_lab.py:134."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regime_lab.py",
+    "/app/test_reports/pytest/regime_lab_results.xml",
+    "/app/test_reports/pytest/regime_lab_edge_results.xml"
+  ],
+  "action_items": [
+    "Migrate or relabel stored regime models using stats.trend_strength so old analyses and dynamic strategies obey the new label invariant.",
+    "Filter assignments by the analysis kept map in build and walk-forward/optimizer paths as documented; discarded regimes must not enter the generated strategy.",
+    "Validate regime_id before int conversion in keep (and similarly in assign) and return a controlled 400/422 response.",
+    "Retest the complete Regime-Lab workflow after fixes."
+  ],
+  "critical_code_review_comments": [
+    "regime_opt._assignment_items returns every assignment for a scope and never consults doc.kept; build and walk-forward therefore include discarded regimes.",
+    "start_regime_optimize also does not reject a discarded regime, despite the keep endpoint documentation saying discarded regimes are skipped during strategy search.",
+    "Regime-Lab request bodies are untyped Dict values; direct int(body.get('regime_id')) calls allow malformed requests to become 500 errors. Use Pydantic request models or explicit validation.",
+    "RegimeLab.js is 584 lines and combines list, analysis detail, regime cards, job polling, build, and walk-forward concerns; it is approaching the maintainability threshold and should be split before further expansion."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_regime_lab.py"
+  ],
+  "success_rate": {
+    "backend": "75% (9/12)",
+    "frontend": "100% of executed flows"
+  },
+  "seed_data_creation": "Created temporary TEST_Regime_Lab_QA analyses, optimizer/WF runs, TEST dynamic strategies, and generated base custom strategies. Temporary analyses/dynamic/custom strategies were cleaned up; pre-existing ra_c8206904, dyn_19a907e8, and custom_dd633f11 were preserved.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The seeded ra_c8206904 remains the best frontend fixture and has two assignments plus saved WF. Full public-URL analyze→optimize→assign→walk-forward→build completed quickly in this environment. UI tests confirmed regime charts BTC/ETH, legend, cards, similarity, optimize configuration panel, build controls and saved verdict. Optimizer and Backtester modals still open.",
+  "rca_of_the_issue": "Label defect: labels are materialized in MongoDB and old documents were not migrated when _label_de changed. Keep/build defect: keep only writes doc.kept, while _assignment_items filters solely by assignment key prefix and build consumes that unfiltered map. Validation defect: keep constructs its key with int(body.get('regime_id')) without checking for None or using a typed request schema.",
+  "flaky_tests": [
+    "One unauthenticated analyze request transiently received a public-ingress 502; an immediate isolated retry passed with the expected 401. This was not counted as a product failure."
+  ]
+}
